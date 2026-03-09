@@ -6,7 +6,7 @@ import { textResult, errorResult } from "../utils/formatting.js";
 export function registerPayeeLocationTools(server: McpServer) {
   server.registerTool("list_payee_locations", {
     title: "List Payee Locations",
-    description: "List all payee GPS locations for a budget",
+    description: "[1 API call] List all payee GPS locations for a budget",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
     },
@@ -27,7 +27,7 @@ export function registerPayeeLocationTools(server: McpServer) {
 
   server.registerTool("get_payee_location", {
     title: "Get Payee Location",
-    description: "Get a single payee location by ID",
+    description: "[1 API call] Get a single payee location by ID",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       payee_location_id: z.string().describe("The payee location ID"),
@@ -47,7 +47,7 @@ export function registerPayeeLocationTools(server: McpServer) {
 
   server.registerTool("get_payee_locations_for_payee", {
     title: "Get Locations for Payee",
-    description: "Get all GPS locations for a specific payee",
+    description: "[1 API call] Get all GPS locations for a specific payee",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       payee_id: z.string().describe("The payee ID"),

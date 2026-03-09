@@ -7,10 +7,10 @@ export function registerWorkflowTools(server: McpServer) {
   server.registerTool("merge_category", {
     title: "Merge Category",
     description:
-      "[Workflow] Merges a source category into a target category: re-categorizes all transactions and moves all historical budgeted amounts. " +
+      "[Variable API calls] [Workflow] Merges a source category into a target category: re-categorizes all transactions and moves all historical budgeted amounts. " +
+      "Dry run costs 4 + N calls (N = number of budget months). Execution costs additional 1 + 2*M calls (M = months with non-zero budgets). " +
       "Defaults to dry_run=true to preview changes before executing. " +
-      "After merging, the source category will have zero transactions and zero budgeted amounts across all months - you can then manually hide/delete it in the YNAB app. " +
-      "Note: rate limited to 200 API calls/hour, so categories with very long histories may need multiple runs.",
+      "After merging, the source category will have zero transactions and zero budgeted amounts across all months - you can then manually hide/delete it in the YNAB app.",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       source_category_id: z.string().describe("Category ID to merge FROM (will be emptied)"),

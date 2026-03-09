@@ -6,7 +6,7 @@ import { textResult, errorResult, formatCurrency } from "../utils/formatting.js"
 export function registerMoneyMovementTools(server: McpServer) {
   server.registerTool("list_money_movements", {
     title: "List Money Movements",
-    description: "List all money movements for a budget (funds moved between categories)",
+    description: "[1 API call] List all money movements for a budget (funds moved between categories)",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
     },
@@ -29,7 +29,7 @@ export function registerMoneyMovementTools(server: McpServer) {
 
   server.registerTool("get_month_money_movements", {
     title: "Get Month Money Movements",
-    description: "Get money movements for a specific month",
+    description: "[1 API call] Get money movements for a specific month",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       month: z.string().describe("Month in YYYY-MM-DD format (first of month) or 'current'"),
@@ -53,7 +53,7 @@ export function registerMoneyMovementTools(server: McpServer) {
 
   server.registerTool("list_money_movement_groups", {
     title: "List Money Movement Groups",
-    description: "List all money movement groups for a budget",
+    description: "[1 API call] List all money movement groups for a budget",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
     },
@@ -74,7 +74,7 @@ export function registerMoneyMovementTools(server: McpServer) {
 
   server.registerTool("get_month_money_movement_groups", {
     title: "Get Month Money Movement Groups",
-    description: "Get money movement groups for a specific month",
+    description: "[1 API call] Get money movement groups for a specific month",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       month: z.string().describe("Month in YYYY-MM-DD format (first of month) or 'current'"),

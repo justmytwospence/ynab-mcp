@@ -13,7 +13,7 @@ const FREQUENCIES = [
 export function registerScheduledTransactionTools(server: McpServer) {
   server.registerTool("list_scheduled_transactions", {
     title: "List Scheduled Transactions",
-    description: "List all scheduled (recurring) transactions for a budget",
+    description: "[1 API call] List all scheduled (recurring) transactions for a budget",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
@@ -40,7 +40,7 @@ export function registerScheduledTransactionTools(server: McpServer) {
 
   server.registerTool("get_scheduled_transaction", {
     title: "Get Scheduled Transaction",
-    description: "Get details for a single scheduled transaction",
+    description: "[1 API call] Get details for a single scheduled transaction",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       scheduled_transaction_id: z.string().describe("The scheduled transaction ID"),
@@ -78,7 +78,7 @@ export function registerScheduledTransactionTools(server: McpServer) {
 
   server.registerTool("create_scheduled_transaction", {
     title: "Create Scheduled Transaction",
-    description: "Create a new scheduled (recurring) transaction. Date must be in the future (up to 5 years).",
+    description: "[1 API call] Create a new scheduled (recurring) transaction. Date must be in the future (up to 5 years).",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       account_id: z.string().describe("Account ID"),
@@ -118,7 +118,7 @@ export function registerScheduledTransactionTools(server: McpServer) {
 
   server.registerTool("update_scheduled_transaction", {
     title: "Update Scheduled Transaction",
-    description: "Update an existing scheduled transaction",
+    description: "[1 API call] Update an existing scheduled transaction",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       scheduled_transaction_id: z.string().describe("The scheduled transaction ID"),
@@ -161,7 +161,7 @@ export function registerScheduledTransactionTools(server: McpServer) {
 
   server.registerTool("delete_scheduled_transaction", {
     title: "Delete Scheduled Transaction",
-    description: "Delete a scheduled transaction",
+    description: "[1 API call] Delete a scheduled transaction",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       scheduled_transaction_id: z.string().describe("The scheduled transaction ID to delete"),

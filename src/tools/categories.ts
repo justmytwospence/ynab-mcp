@@ -6,7 +6,7 @@ import { textResult, errorResult, formatCurrency, dollarsToMilliunits } from "..
 export function registerCategoryTools(server: McpServer) {
   server.registerTool("list_categories", {
     title: "List Categories",
-    description: "List all categories grouped by category group for a budget",
+    description: "[1 API call] List all categories grouped by category group for a budget",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
@@ -37,7 +37,7 @@ export function registerCategoryTools(server: McpServer) {
 
   server.registerTool("get_category", {
     title: "Get Category",
-    description: "Get details for a single category",
+    description: "[1 API call] Get details for a single category",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       category_id: z.string().describe("The category ID"),
@@ -68,7 +68,7 @@ export function registerCategoryTools(server: McpServer) {
 
   server.registerTool("create_category", {
     title: "Create Category",
-    description: "Create a new category in a budget",
+    description: "[1 API call] Create a new category in a budget",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       name: z.string().describe("Category name"),
@@ -98,7 +98,7 @@ export function registerCategoryTools(server: McpServer) {
 
   server.registerTool("update_category", {
     title: "Update Category",
-    description: "Update an existing category's name, note, or goal",
+    description: "[1 API call] Update an existing category's name, note, or goal",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       category_id: z.string().describe("The category ID to update"),
@@ -127,7 +127,7 @@ export function registerCategoryTools(server: McpServer) {
 
   server.registerTool("get_month_category", {
     title: "Get Month Category",
-    description: "Get a category's budget details for a specific month",
+    description: "[1 API call] Get a category's budget details for a specific month",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       month: z.string().describe("Month in YYYY-MM-DD format (first of month) or 'current'"),
@@ -154,7 +154,7 @@ export function registerCategoryTools(server: McpServer) {
 
   server.registerTool("update_month_category", {
     title: "Update Month Category Budget",
-    description: "Update the budgeted/assigned amount for a category in a specific month. This is how you allocate money to categories.",
+    description: "[1 API call] Update the budgeted/assigned amount for a category in a specific month. This is how you allocate money to categories.",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       month: z.string().describe("Month in YYYY-MM-DD format (first of month) or 'current'"),
@@ -176,7 +176,7 @@ export function registerCategoryTools(server: McpServer) {
 
   server.registerTool("create_category_group", {
     title: "Create Category Group",
-    description: "Create a new category group in a budget",
+    description: "[1 API call] Create a new category group in a budget",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       name: z.string().max(50).describe("Category group name (max 50 characters)"),
@@ -196,7 +196,7 @@ export function registerCategoryTools(server: McpServer) {
 
   server.registerTool("update_category_group", {
     title: "Update Category Group",
-    description: "Update a category group's name",
+    description: "[1 API call] Update a category group's name",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       category_group_id: z.string().describe("The category group ID"),

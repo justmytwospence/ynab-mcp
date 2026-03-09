@@ -12,7 +12,7 @@ const ACCOUNT_TYPES = [
 export function registerAccountTools(server: McpServer) {
   server.registerTool("list_accounts", {
     title: "List Accounts",
-    description: "List all accounts for a budget including balances and types",
+    description: "[1 API call] List all accounts for a budget including balances and types",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
@@ -37,7 +37,7 @@ export function registerAccountTools(server: McpServer) {
 
   server.registerTool("get_account", {
     title: "Get Account",
-    description: "Get details for a single account",
+    description: "[1 API call] Get details for a single account",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       account_id: z.string().describe("The account ID"),
@@ -66,7 +66,7 @@ export function registerAccountTools(server: McpServer) {
 
   server.registerTool("create_account", {
     title: "Create Account",
-    description: "Create a new account in a budget",
+    description: "[1 API call] Create a new account in a budget",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       name: z.string().describe("Account name"),

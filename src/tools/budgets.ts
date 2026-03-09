@@ -6,7 +6,7 @@ import { textResult, errorResult, formatCurrency } from "../utils/formatting.js"
 export function registerBudgetTools(server: McpServer) {
   server.registerTool("list_budgets", {
     title: "List Budgets",
-    description: "List all budgets the user has access to, with optional account info",
+    description: "[1 API call] List all budgets the user has access to, with optional account info",
     inputSchema: {
       include_accounts: z.boolean().optional().describe("Include accounts for each budget"),
     },
@@ -33,7 +33,7 @@ export function registerBudgetTools(server: McpServer) {
 
   server.registerTool("get_budget", {
     title: "Get Budget",
-    description: "Get a single budget's full detail including all entities. Use 'last-used' for the most recently accessed budget.",
+    description: "[1 API call] Get a single budget's full detail including all entities. Use 'last-used' for the most recently accessed budget.",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       last_knowledge_of_server: z.number().optional().describe("Delta request - only return entities changed since this server knowledge value"),
@@ -62,7 +62,7 @@ export function registerBudgetTools(server: McpServer) {
 
   server.registerTool("get_budget_settings", {
     title: "Get Budget Settings",
-    description: "Get a budget's date and currency format settings",
+    description: "[1 API call] Get a budget's date and currency format settings",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
     },

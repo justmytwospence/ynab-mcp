@@ -18,7 +18,7 @@ function formatTransaction(t: TransactionDetail | HybridTransaction): string {
 export function registerTransactionTools(server: McpServer) {
   server.registerTool("list_transactions", {
     title: "List Transactions",
-    description: "List transactions for a budget with optional filters. Returns most recent transactions first.",
+    description: "[1 API call] List transactions for a budget with optional filters. Returns most recent transactions first.",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       since_date: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD)"),
@@ -44,7 +44,7 @@ export function registerTransactionTools(server: McpServer) {
 
   server.registerTool("get_transaction", {
     title: "Get Transaction",
-    description: "Get details for a single transaction",
+    description: "[1 API call] Get details for a single transaction",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       transaction_id: z.string().describe("The transaction ID"),
@@ -81,7 +81,7 @@ export function registerTransactionTools(server: McpServer) {
 
   server.registerTool("create_transaction", {
     title: "Create Transaction",
-    description: "Create a new transaction. Amounts are in dollars (positive for inflows, negative for outflows). For split transactions, set category_id to null and provide subtransactions.",
+    description: "[1 API call] Create a new transaction. Amounts are in dollars (positive for inflows, negative for outflows). For split transactions, set category_id to null and provide subtransactions.",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       account_id: z.string().describe("Account ID for the transaction"),
@@ -141,7 +141,7 @@ export function registerTransactionTools(server: McpServer) {
 
   server.registerTool("create_transactions", {
     title: "Create Multiple Transactions",
-    description: "Create multiple transactions at once. Each transaction needs account_id, date, and amount at minimum.",
+    description: "[1 API call, bulk] Create multiple transactions at once. Each transaction needs account_id, date, and amount at minimum.",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       transactions: z.array(z.object({
@@ -183,7 +183,7 @@ export function registerTransactionTools(server: McpServer) {
 
   server.registerTool("update_transaction", {
     title: "Update Transaction",
-    description: "Update an existing transaction",
+    description: "[1 API call] Update an existing transaction",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       transaction_id: z.string().describe("The transaction ID to update"),
@@ -218,7 +218,7 @@ export function registerTransactionTools(server: McpServer) {
 
   server.registerTool("update_transactions", {
     title: "Bulk Update Transactions",
-    description: "Update multiple transactions at once. Each must include either id or import_id to identify the transaction.",
+    description: "[1 API call, bulk] Update multiple transactions at once. Each must include either id or import_id to identify the transaction.",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       transactions: z.array(z.object({
@@ -255,7 +255,7 @@ export function registerTransactionTools(server: McpServer) {
 
   server.registerTool("delete_transaction", {
     title: "Delete Transaction",
-    description: "Delete a transaction",
+    description: "[1 API call] Delete a transaction",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       transaction_id: z.string().describe("The transaction ID to delete"),
@@ -273,7 +273,7 @@ export function registerTransactionTools(server: McpServer) {
 
   server.registerTool("import_transactions", {
     title: "Import Transactions",
-    description: "Trigger an import of transactions from linked financial institutions",
+    description: "[1 API call] Trigger an import of transactions from linked financial institutions",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
     },
@@ -292,7 +292,7 @@ export function registerTransactionTools(server: McpServer) {
 
   server.registerTool("list_account_transactions", {
     title: "List Account Transactions",
-    description: "List transactions for a specific account",
+    description: "[1 API call] List transactions for a specific account",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       account_id: z.string().describe("The account ID"),
@@ -317,7 +317,7 @@ export function registerTransactionTools(server: McpServer) {
 
   server.registerTool("list_category_transactions", {
     title: "List Category Transactions",
-    description: "List transactions for a specific category",
+    description: "[1 API call] List transactions for a specific category",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       category_id: z.string().describe("The category ID"),
@@ -342,7 +342,7 @@ export function registerTransactionTools(server: McpServer) {
 
   server.registerTool("list_payee_transactions", {
     title: "List Payee Transactions",
-    description: "List transactions for a specific payee",
+    description: "[1 API call] List transactions for a specific payee",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       payee_id: z.string().describe("The payee ID"),
@@ -367,7 +367,7 @@ export function registerTransactionTools(server: McpServer) {
 
   server.registerTool("list_month_transactions", {
     title: "List Month Transactions",
-    description: "List transactions for a specific month",
+    description: "[1 API call] List transactions for a specific month",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       month: z.string().describe("Month in YYYY-MM-DD format (first of month)"),

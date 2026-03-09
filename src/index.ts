@@ -12,11 +12,18 @@ import { registerMoneyMovementTools } from "./tools/money-movements.js";
 import { registerTransactionTools } from "./tools/transactions.js";
 import { registerScheduledTransactionTools } from "./tools/scheduled-transactions.js";
 import { registerWorkflowTools } from "./workflows/merge-category.js";
+import { registerApiUsageTools } from "./tools/api-usage.js";
 
-const server = new McpServer({
-  name: "ynab-mcp",
-  version: "1.0.0",
-});
+const server = new McpServer(
+  { name: "ynab-mcp", version: "1.0.0" },
+  {
+    instructions:
+      "YNAB API rate limit: 200 requests/hour (sliding window) shared across all tools. " +
+      "Each tool description shows its API call cost in brackets (e.g., [1 API call]). " +
+      "Use get_api_usage to check remaining quota before batch operations. " +
+      "Prefer bulk tools (create_transactions, update_transactions) over repeated single-call tools.",
+  }
+);
 
 registerUserTools(server);
 registerBudgetTools(server);
@@ -29,6 +36,7 @@ registerMoneyMovementTools(server);
 registerTransactionTools(server);
 registerScheduledTransactionTools(server);
 registerWorkflowTools(server);
+registerApiUsageTools(server);
 
 async function main() {
   const transport = new StdioServerTransport();

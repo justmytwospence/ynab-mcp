@@ -5,7 +5,7 @@ import { textResult, errorResult } from "../utils/formatting.js";
 export function registerUserTools(server: McpServer) {
   server.registerTool("get_user", {
     title: "Get User",
-    description: "Get the authenticated user's information including user ID",
+    description: "[1 API call] Get the authenticated user's information including user ID",
     annotations: { readOnlyHint: true },
   }, async () => {
     try {

@@ -6,7 +6,7 @@ import { textResult, errorResult, formatCurrency } from "../utils/formatting.js"
 export function registerMonthTools(server: McpServer) {
   server.registerTool("list_months", {
     title: "List Budget Months",
-    description: "List all budget months for a budget, showing income, budgeted, activity, and ready to assign",
+    description: "[1 API call] List all budget months for a budget, showing income, budgeted, activity, and ready to assign",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
@@ -29,7 +29,7 @@ export function registerMonthTools(server: McpServer) {
 
   server.registerTool("get_month", {
     title: "Get Budget Month",
-    description: "Get detailed info for a single budget month including all category balances. Use 'current' for the current month.",
+    description: "[1 API call] Get detailed info for a single budget month including all category balances. Use 'current' for the current month.",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       month: z.string().describe("Month in YYYY-MM-DD format (first of month) or 'current'"),

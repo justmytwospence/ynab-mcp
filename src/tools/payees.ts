@@ -6,7 +6,7 @@ import { textResult, errorResult } from "../utils/formatting.js";
 export function registerPayeeTools(server: McpServer) {
   server.registerTool("list_payees", {
     title: "List Payees",
-    description: "List all payees for a budget",
+    description: "[1 API call] List all payees for a budget",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
@@ -30,7 +30,7 @@ export function registerPayeeTools(server: McpServer) {
 
   server.registerTool("get_payee", {
     title: "Get Payee",
-    description: "Get details for a single payee",
+    description: "[1 API call] Get details for a single payee",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       payee_id: z.string().describe("The payee ID"),
@@ -53,7 +53,7 @@ export function registerPayeeTools(server: McpServer) {
 
   server.registerTool("update_payee", {
     title: "Update Payee",
-    description: "Update a payee's name",
+    description: "[1 API call] Update a payee's name",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       payee_id: z.string().describe("The payee ID"),

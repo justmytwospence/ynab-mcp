@@ -1,0 +1,31 @@
+{
+  "name": "ynab-mcp",
+  "version": "1.0.0",
+  "description": "A comprehensive YNAB MCP server exposing the full YNAB API",
+  "main": "dist/index.js",
+  "bin": {
+    "ynab-mcp": "dist/index.js"
+  },
+  "scripts": {
+    "start": "node dist/index.js",
+    "build": "tsc",
+    "dev": "tsx watch src/index.ts",
+    "prepublishOnly": "npm run build"
+  },
+  "keywords": ["ynab", "mcp", "budget", "model-context-protocol"],
+  "license": "MIT",
+  "type": "module",
+  "files": [
+    "dist"
+  ],
+  "dependencies": {
+    "@modelcontextprotocol/sdk": "^1.27.1",
+    "ynab": "^4.0.0",
+    "zod": "^4.3.6"
+  },
+  "devDependencies": {
+    "@types/node": "^25.3.5",
+    "tsx": "^4.21.0",
+    "typescript": "^5.9.3"
+  }
+}

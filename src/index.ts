@@ -12,6 +12,7 @@ import { registerMoneyMovementTools } from "./tools/money-movements.js";
 import { registerTransactionTools } from "./tools/transactions.js";
 import { registerScheduledTransactionTools } from "./tools/scheduled-transactions.js";
 import { registerWorkflowTools } from "./workflows/merge-category.js";
+import { registerCreditCardAuditTools } from "./workflows/audit-credit-card-payments.js";
 import { registerApiUsageTools } from "./tools/api-usage.js";
 
 const server = new McpServer(
@@ -36,6 +37,7 @@ registerMoneyMovementTools(server);
 registerTransactionTools(server);
 registerScheduledTransactionTools(server);
 registerWorkflowTools(server);
+registerCreditCardAuditTools(server);
 registerApiUsageTools(server);
 
 async function main() {

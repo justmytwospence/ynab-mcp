@@ -1,6 +1,6 @@
 # ynab-mcp
 
-An MCP (Model Context Protocol) server that exposes the full [YNAB](https://www.ynab.com/) API, allowing LLMs to read and manage your budget through natural language.
+An MCP (Model Context Protocol) server that exposes the full [YNAB](https://www.ynab.com/) API, allowing LLMs to read and manage your budget through natural language. Provides tools for CRUD operations, resources for ambient budget context, and prompts for guided financial workflows.
 
 ## Requirements
 
@@ -159,6 +159,30 @@ Add to your `claude_desktop_config.json`:
 | Tool | Description |
 |------|-------------|
 | `merge_category` | Merge a source category into a target, moving all transactions and budgeted amounts |
+| `audit_credit_card_payments` | Audit CC payment category balances against card balances, with optional auto-fix |
+
+## Resources
+
+Resources provide structured budget data that clients can pull into context without a tool call. Template resources use URI parameters (e.g., `{budget_id}`).
+
+| Resource | URI | Description | API Cost |
+|----------|-----|-------------|----------|
+| API Usage | `ynab://api-usage` | Current rate limit status: calls used, remaining, window reset | 0 |
+| Budget Summary | `ynab://budgets/{budget_id}/summary` | Budget overview with accounts, balances, and category groups | 1 |
+| Account List | `ynab://budgets/{budget_id}/accounts` | All accounts with type, balance, cleared/uncleared balances | 1 |
+| Monthly Categories | `ynab://budgets/{budget_id}/months/{month}/categories` | All categories for a month with budgeted, activity, and balance | 1 |
+
+## Prompts
+
+Prompts are guided workflow templates that users can invoke to walk through common budgeting tasks. They instruct the LLM which tools to call and how to interpret results.
+
+| Prompt | Arguments | Description |
+|--------|-----------|-------------|
+| `monthly-review` | `budget_id`, `month` | Review a budget month: overspent categories, spending variances, underfunded goals, CC mismatches |
+| `transaction-audit` | `budget_id`, `account_id`, `since_date` | Audit transactions for uncategorized, unapproved, duplicates, and unusual amounts |
+| `budget-setup-guide` | `budget_id` | Guided walkthrough: accounts, categories, targets, scheduled transactions, fund allocation |
+| `spending-analysis` | `budget_id`, `month` | Category breakdown, budget vs. actual, top payees, income vs. spending |
+| `credit-card-audit` | `budget_id`, `since_month`? | Audit CC payment category balances with dry-run-first, confirm-before-apply flow |
 
 ## Development
 

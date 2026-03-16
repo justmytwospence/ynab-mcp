@@ -14,6 +14,8 @@ import { registerScheduledTransactionTools } from "./tools/scheduled-transaction
 import { registerWorkflowTools } from "./workflows/merge-category.js";
 import { registerCreditCardAuditTools } from "./workflows/audit-credit-card-payments.js";
 import { registerApiUsageTools } from "./tools/api-usage.js";
+import { registerResources } from "./resources.js";
+import { registerPrompts } from "./prompts.js";
 
 const server = new McpServer(
   { name: "ynab-mcp", version: "1.0.0" },
@@ -39,6 +41,8 @@ registerScheduledTransactionTools(server);
 registerWorkflowTools(server);
 registerCreditCardAuditTools(server);
 registerApiUsageTools(server);
+registerResources(server);
+registerPrompts(server);
 
 async function main() {
   const transport = new StdioServerTransport();

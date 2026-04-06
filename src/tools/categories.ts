@@ -31,7 +31,7 @@ export function registerCategoryTools(server: McpServer) {
       }
       return textResult(`Categories:${lines.join("\n")}\n\nServer Knowledge: ${response.data.server_knowledge}`);
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -62,7 +62,7 @@ export function registerCategoryTools(server: McpServer) {
       ];
       return textResult(lines.join("\n"));
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -92,7 +92,7 @@ export function registerCategoryTools(server: McpServer) {
       const c = response.data.category;
       return textResult(`Created category "${c.name}"\nID: ${c.id}`);
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -121,7 +121,7 @@ export function registerCategoryTools(server: McpServer) {
       const c = response.data.category;
       return textResult(`Updated category "${c.name}"\nID: ${c.id}`);
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -148,7 +148,7 @@ export function registerCategoryTools(server: McpServer) {
       ];
       return textResult(lines.join("\n"));
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -170,7 +170,7 @@ export function registerCategoryTools(server: McpServer) {
       const c = response.data.category;
       return textResult(`Updated "${c.name}" for ${month}: Budgeted ${formatCurrency(c.budgeted)}`);
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -190,7 +190,7 @@ export function registerCategoryTools(server: McpServer) {
       const g = response.data.category_group;
       return textResult(`Created category group "${g.name}"\nID: ${g.id}`);
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -211,7 +211,7 @@ export function registerCategoryTools(server: McpServer) {
       const g = response.data.category_group;
       return textResult(`Updated category group "${g.name}"\nID: ${g.id}`);
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 }

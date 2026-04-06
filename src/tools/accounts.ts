@@ -31,7 +31,7 @@ export function registerAccountTools(server: McpServer) {
         `Accounts (${accounts.length}):\n${lines.join("\n")}\n\nServer Knowledge: ${response.data.server_knowledge}`
       );
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -60,7 +60,7 @@ export function registerAccountTools(server: McpServer) {
       ];
       return textResult(lines.join("\n"));
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -82,7 +82,7 @@ export function registerAccountTools(server: McpServer) {
       const a = response.data.account;
       return textResult(`Created account "${a.name}" (${a.type}) with balance ${formatCurrency(a.balance)}\nID: ${a.id}`);
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 }

@@ -23,7 +23,7 @@ export function registerMoneyMovementTools(server: McpServer) {
       });
       return textResult(`Money Movements (${movements.length}):\n${lines.join("\n")}`);
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -47,7 +47,7 @@ export function registerMoneyMovementTools(server: McpServer) {
       });
       return textResult(`Money Movements for ${month} (${movements.length}):\n${lines.join("\n")}`);
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -68,7 +68,7 @@ export function registerMoneyMovementTools(server: McpServer) {
       );
       return textResult(`Money Movement Groups (${groups.length}):\n${lines.join("\n")}`);
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -90,7 +90,7 @@ export function registerMoneyMovementTools(server: McpServer) {
       );
       return textResult(`Money Movement Groups for ${month} (${groups.length}):\n${lines.join("\n")}`);
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 }

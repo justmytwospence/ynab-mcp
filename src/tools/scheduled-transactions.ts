@@ -34,7 +34,7 @@ export function registerScheduledTransactionTools(server: McpServer) {
         `Scheduled Transactions (${txns.length}):\n${lines.join("\n")}\n\nServer Knowledge: ${response.data.server_knowledge}`
       );
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -72,7 +72,7 @@ export function registerScheduledTransactionTools(server: McpServer) {
       }
       return textResult(lines.join("\n"));
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -112,7 +112,7 @@ export function registerScheduledTransactionTools(server: McpServer) {
         `Created scheduled transaction: ${t.date_first} | ${formatCurrency(t.amount)} | ${t.payee_name ?? "No payee"} | ${t.frequency}\nID: ${t.id}`
       );
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -155,7 +155,7 @@ export function registerScheduledTransactionTools(server: McpServer) {
         `Updated scheduled transaction: ${t.date_first} | ${formatCurrency(t.amount)} | ${t.frequency}\nID: ${t.id}`
       );
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -177,7 +177,7 @@ export function registerScheduledTransactionTools(server: McpServer) {
         `Deleted scheduled transaction: ${t.date_first} | ${formatCurrency(t.amount)} | ${t.payee_name ?? "No payee"}\nID: ${t.id}`
       );
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 }

@@ -21,7 +21,7 @@ export function registerPayeeLocationTools(server: McpServer) {
       );
       return textResult(`Payee Locations (${locations.length}):\n${lines.join("\n")}`);
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -41,7 +41,7 @@ export function registerPayeeLocationTools(server: McpServer) {
         `Payee Location:\n  Payee ID: ${l.payee_id}\n  Latitude: ${l.latitude}\n  Longitude: ${l.longitude}\n  ID: ${l.id}`
       );
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -63,7 +63,7 @@ export function registerPayeeLocationTools(server: McpServer) {
       );
       return textResult(`Locations for payee ${payee_id}:\n${lines.join("\n")}`);
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 }

@@ -153,7 +153,7 @@ export function registerWorkflowTools(server: McpServer) {
 
       return textResult(lines.join("\n"));
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 }

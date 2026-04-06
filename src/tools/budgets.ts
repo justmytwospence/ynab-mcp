@@ -27,7 +27,7 @@ export function registerBudgetTools(server: McpServer) {
       });
       return textResult(`Budgets:\n${lines.join("\n")}`);
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -56,7 +56,7 @@ export function registerBudgetTools(server: McpServer) {
       ];
       return textResult(summary.join("\n"));
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -82,7 +82,7 @@ export function registerBudgetTools(server: McpServer) {
       ];
       return textResult(lines.join("\n"));
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 }

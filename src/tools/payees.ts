@@ -24,7 +24,7 @@ export function registerPayeeTools(server: McpServer) {
         `Payees (${payees.length}):\n${lines.join("\n")}\n\nServer Knowledge: ${response.data.server_knowledge}`
       );
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -47,7 +47,7 @@ export function registerPayeeTools(server: McpServer) {
       ];
       return textResult(lines.join("\n"));
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -68,7 +68,7 @@ export function registerPayeeTools(server: McpServer) {
       const p = response.data.payee;
       return textResult(`Updated payee "${p.name}"\nID: ${p.id}`);
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 }

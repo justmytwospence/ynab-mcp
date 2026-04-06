@@ -13,7 +13,7 @@ export function registerUserTools(server: McpServer) {
       const user = response.data.user;
       return textResult(`User ID: ${user.id}`);
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 }

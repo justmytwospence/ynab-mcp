@@ -38,7 +38,7 @@ export function registerTransactionTools(server: McpServer) {
         `Transactions (${txns.length}):\n${lines.join("\n")}\n\nServer Knowledge: ${response.data.server_knowledge}`
       );
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -75,7 +75,7 @@ export function registerTransactionTools(server: McpServer) {
       }
       return textResult(lines.join("\n"));
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -116,7 +116,7 @@ export function registerTransactionTools(server: McpServer) {
           memo,
           cleared,
           approved,
-          flag_color: flag_color ?? null,
+          ...(flag_color !== undefined && { flag_color }),
           subtransactions: subtransactions?.map((s) => ({
             amount: dollarsToMilliunits(s.amount),
             payee_id: s.payee_id,
@@ -135,7 +135,7 @@ export function registerTransactionTools(server: McpServer) {
       const txns = response.data.transactions;
       return textResult(`Created ${txns?.length ?? 0} transaction(s).`);
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -171,13 +171,13 @@ export function registerTransactionTools(server: McpServer) {
           memo: t.memo,
           cleared: t.cleared,
           approved: t.approved,
-          flag_color: t.flag_color ?? null,
+          ...(t.flag_color !== undefined && { flag_color: t.flag_color }),
         })),
       });
       const created = response.data.transactions;
       return textResult(`Created ${created?.length ?? 0} transaction(s).`);
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -212,7 +212,7 @@ export function registerTransactionTools(server: McpServer) {
         `Updated transaction: ${t.date} | ${formatCurrency(t.amount)} | ${t.payee_name ?? "No payee"}\nID: ${t.id}`
       );
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -243,13 +243,13 @@ export function registerTransactionTools(server: McpServer) {
         transactions: transactions.map((t) => ({
           ...t,
           amount: t.amount != null ? dollarsToMilliunits(t.amount) : undefined,
-          flag_color: t.flag_color ?? null,
+          ...(t.flag_color !== undefined && { flag_color: t.flag_color }),
         })),
       });
       const updated = response.data.transactions;
       return textResult(`Updated ${updated?.length ?? 0} transaction(s).`);
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -267,7 +267,7 @@ export function registerTransactionTools(server: McpServer) {
       const t = response.data.transaction;
       return textResult(`Deleted transaction: ${t.date} | ${formatCurrency(t.amount)} | ${t.payee_name ?? "No payee"}\nID: ${t.id}`);
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -286,7 +286,7 @@ export function registerTransactionTools(server: McpServer) {
         `Import complete:\n  Transaction IDs imported: ${data.transaction_ids?.length ?? 0}`
       );
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -311,7 +311,7 @@ export function registerTransactionTools(server: McpServer) {
       const lines = txns.map(formatTransaction);
       return textResult(`Account Transactions (${txns.length}):\n${lines.join("\n")}`);
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -336,7 +336,7 @@ export function registerTransactionTools(server: McpServer) {
       const lines = txns.map(formatTransaction);
       return textResult(`Category Transactions (${txns.length}):\n${lines.join("\n")}`);
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -361,7 +361,7 @@ export function registerTransactionTools(server: McpServer) {
       const lines = txns.map(formatTransaction);
       return textResult(`Payee Transactions (${txns.length}):\n${lines.join("\n")}`);
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -386,7 +386,7 @@ export function registerTransactionTools(server: McpServer) {
       const lines = txns.map(formatTransaction);
       return textResult(`Month Transactions for ${month} (${txns.length}):\n${lines.join("\n")}`);
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 }

@@ -23,7 +23,7 @@ export function registerMonthTools(server: McpServer) {
         `Budget Months (${months.length}):\n${lines.join("\n")}\n\nServer Knowledge: ${response.data.server_knowledge}`
       );
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 
@@ -56,7 +56,7 @@ export function registerMonthTools(server: McpServer) {
       }
       return textResult(lines.join("\n"));
     } catch (e: any) {
-      return errorResult(e.message);
+      return errorResult(e);
     }
   });
 }

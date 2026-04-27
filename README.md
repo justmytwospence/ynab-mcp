@@ -60,6 +60,18 @@ Add to your `claude_desktop_config.json`:
 
 49 tools covering the full YNAB API. All monetary amounts use YNAB's milliunits format (e.g., `$12.34` = `12340`).
 
+### Rate limit awareness
+
+The YNAB API caps usage at **200 requests per hour** (sliding window) per token. The server tracks every call and exposes:
+
+- `get_api_usage` tool / `ynab://api-usage` resource — explicit, on-demand check (0 API calls).
+- **Automatic warnings** appended to every tool result once usage gets high:
+  - `[RATE LIMIT WARNING]` at 50 or fewer remaining
+  - `[RATE LIMIT CRITICAL]` at 20 or fewer remaining
+  - `[RATE LIMIT REACHED]` at 0 remaining
+
+Each tool's description includes its API call cost in brackets (e.g. `[1 API call]`). Prefer bulk tools (`create_transactions`, `update_transactions`) over loops of single-call tools.
+
 ### User
 
 | Tool | Description |

@@ -1,3 +1,8 @@
+import { apiUsageTracker } from "./api-usage.js";
+
+const RATE_LIMIT_WARN_THRESHOLD = 50;
+const RATE_LIMIT_CRITICAL_THRESHOLD = 20;
+
 /** Convert dollar amount to YNAB milliunits (e.g., 25.50 -> 25500) */
 export function dollarsToMilliunits(dollars: number): number {
   return Math.round(dollars * 1000);
@@ -23,9 +28,26 @@ export function formatDate(dateStr: string | null | undefined): string {
   return dateStr;
 }
 
+function rateLimitFooter(): string {
+  const usage = apiUsageTracker.getUsage();
+  if (usage.remaining > RATE_LIMIT_WARN_THRESHOLD) return "";
+
+  const reset = usage.windowResetsAt
+    ? ` Window resets at ${usage.windowResetsAt}.`
+    : "";
+
+  if (usage.remaining === 0) {
+    return `\n\n[RATE LIMIT REACHED] 0/${usage.limit} calls remaining this hour.${reset} Further requests will fail with 429 until the window slides.`;
+  }
+  if (usage.remaining < RATE_LIMIT_CRITICAL_THRESHOLD) {
+    return `\n\n[RATE LIMIT CRITICAL] ${usage.remaining}/${usage.limit} calls remaining this hour.${reset} Pause non-essential calls.`;
+  }
+  return `\n\n[RATE LIMIT WARNING] ${usage.remaining}/${usage.limit} calls remaining this hour.${reset}`;
+}
+
 /** Build a text response for MCP tool results */
 export function textResult(text: string) {
-  return { content: [{ type: "text" as const, text }] };
+  return { content: [{ type: "text" as const, text: text + rateLimitFooter() }] };
 }
 
 function extractErrorMessage(e: unknown): string {
@@ -39,5 +61,8 @@ function extractErrorMessage(e: unknown): string {
 
 /** Build an error response for MCP tool results */
 export function errorResult(error: unknown) {
-  return { content: [{ type: "text" as const, text: `Error: ${extractErrorMessage(error)}` }], isError: true };
+  return {
+    content: [{ type: "text" as const, text: `Error: ${extractErrorMessage(error)}${rateLimitFooter()}` }],
+    isError: true,
+  };
 }

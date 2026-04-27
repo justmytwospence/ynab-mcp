@@ -58,7 +58,7 @@ Add to your `claude_desktop_config.json`:
 
 ## Tools
 
-49 tools covering the full YNAB API. All monetary amounts use YNAB's milliunits format (e.g., `$12.34` = `12340`).
+50 tools covering the full YNAB API. All monetary amounts use YNAB's milliunits format (e.g., `$12.34` = `12340`).
 
 ### Rate limit awareness
 
@@ -171,6 +171,7 @@ Each tool's description includes its API call cost in brackets (e.g. `[1 API cal
 | Tool | Description |
 |------|-------------|
 | `merge_category` | Merge a source category into a target, moving all transactions and budgeted amounts |
+| `delete_category` | Clean up a category for deletion: re-categorizes all history to a replacement and zeros budgets (final delete is manual in the YNAB app — API limitation) |
 | `audit_credit_card_payments` | Audit CC payment category balances against card balances, with optional auto-fix |
 
 ## Resources

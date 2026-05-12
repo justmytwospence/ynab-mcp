@@ -6,22 +6,46 @@ import { textResult, errorResult } from "../utils/formatting.js";
 export function registerPayeeTools(server: McpServer) {
   server.registerTool("list_payees", {
     title: "List Payees",
-    description: "[1 API call] List all payees for a budget",
+    description:
+      "[1 API call] List payees for a budget. Budgets often have 1000+ payees; " +
+      "use `name_filter` (case-insensitive substring) to avoid loading the full list. " +
+      "Use `limit` to cap result size when listing without a filter.",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
+      name_filter: z.string().optional().describe(
+        "Case-insensitive substring filter on payee name. Highly recommended when looking up a known payee."
+      ),
+      limit: z.number().int().positive().optional().describe(
+        "Maximum number of payees to return (after filtering). Useful when you just want the top matches."
+      ),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ budget_id, last_knowledge_of_server }) => {
+  }, async ({ budget_id, name_filter, limit, last_knowledge_of_server }) => {
     try {
       const response = await getClient().payees.getPayees(budget_id, last_knowledge_of_server);
-      const payees = response.data.payees;
-      const lines = payees.map((p) => {
+      const all = response.data.payees;
+      let filtered = all;
+      if (name_filter) {
+        const needle = name_filter.toLowerCase();
+        filtered = all.filter((p) => p.name.toLowerCase().includes(needle));
+      }
+      const totalMatched = filtered.length;
+      const truncated = limit !== undefined && filtered.length > limit;
+      if (truncated) filtered = filtered.slice(0, limit);
+
+      const lines = filtered.map((p) => {
         const transfer = p.transfer_account_id ? ` (Transfer: ${p.transfer_account_id})` : "";
         return `- ${p.name}${transfer} [ID: ${p.id}]`;
       });
+
+      const header = name_filter
+        ? `Payees matching "${name_filter}" (${totalMatched} of ${all.length} total)`
+        : `Payees (${all.length})`;
+      const truncNote = truncated ? `\n(showing first ${limit}; pass a more specific name_filter or higher limit to see more)` : "";
+
       return textResult(
-        `Payees (${payees.length}):\n${lines.join("\n")}\n\nServer Knowledge: ${response.data.server_knowledge}`
+        `${header}:${truncNote}\n${lines.join("\n")}\n\nServer Knowledge: ${response.data.server_knowledge}`
       );
     } catch (e: any) {
       return errorResult(e);

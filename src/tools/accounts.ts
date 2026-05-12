@@ -2,6 +2,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getClient } from "../ynab-client.js";
 import { textResult, errorResult, formatCurrency } from "../utils/formatting.js";
+import { getReconciliationAnchor } from "../workflows/lib/reconciliation.js";
 
 const ACCOUNT_TYPES = [
   "checking", "savings", "cash", "creditCard", "lineOfCredit",
@@ -37,13 +38,20 @@ export function registerAccountTools(server: McpServer) {
 
   server.registerTool("get_account", {
     title: "Get Account",
-    description: "[1 API call] Get details for a single account",
+    description:
+      "[1-2 API calls] Get details for a single account. " +
+      "Set include_reconciliation=true to also fetch the reconciliation anchor " +
+      "(last reconciled date, reconciled balance, count and net of unreconciled cleared transactions) " +
+      "— this costs an additional API call.",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       account_id: z.string().describe("The account ID"),
+      include_reconciliation: z.boolean().default(false).describe(
+        "Include reconciliation anchor info (costs +1 API call). Useful before reconciling."
+      ),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ budget_id, account_id }) => {
+  }, async ({ budget_id, account_id, include_reconciliation }) => {
     try {
       const response = await getClient().accounts.getAccountById(budget_id, account_id);
       const a = response.data.account;
@@ -58,6 +66,30 @@ export function registerAccountTools(server: McpServer) {
         `Note: ${a.note ?? "None"}`,
         `ID: ${a.id}`,
       ];
+
+      if (include_reconciliation) {
+        const anchor = await getReconciliationAnchor(budget_id, account_id);
+        lines.push(``);
+        lines.push(`Reconciliation Anchor:`);
+        if (anchor.lastReconciledDate) {
+          const sourceNote = anchor.lastReconciledDateSource === "transaction"
+            ? " (lower bound — no Reconciliation Balance Adjustment found)"
+            : "";
+          lines.push(`  Last Reconciled Date: ${anchor.lastReconciledDate}${sourceNote}`);
+        } else {
+          lines.push(`  Last Reconciled Date: Never reconciled`);
+        }
+        lines.push(`  Reconciled Balance: ${formatCurrency(anchor.reconciledBalance)}`);
+        lines.push(
+          `  Unreconciled Cleared Transactions: ${anchor.unreconciledTransactions.length} ` +
+          `(net ${formatCurrency(anchor.unreconciledNet)})`
+        );
+        lines.push(
+          `  Note: cleared_balance = reconciled_balance + unreconciled_net = ` +
+          `${formatCurrency(anchor.reconciledBalance + anchor.unreconciledNet)}`
+        );
+      }
+
       return textResult(lines.join("\n"));
     } catch (e: any) {
       return errorResult(e);

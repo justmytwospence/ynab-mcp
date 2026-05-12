@@ -8,11 +8,25 @@ const CLEARED_VALUES = ["cleared", "uncleared", "reconciled"] as const;
 const FLAG_COLORS = ["red", "orange", "yellow", "green", "blue", "purple"] as const;
 const TRANSACTION_TYPES = ["uncategorized", "unapproved"] as const;
 
+const CLEARED_FILTER_DESC =
+  "Client-side filter on cleared status. Accepts 'reconciled', 'cleared', 'uncleared', " +
+  "or 'unreconciled' (alias for cleared OR uncleared — useful for reconciliation workflows).";
+const CLEARED_FILTER_VALUES = ["reconciled", "cleared", "uncleared", "unreconciled"] as const;
+type ClearedFilter = typeof CLEARED_FILTER_VALUES[number];
+
+function matchesClearedFilter(
+  txn: TransactionDetail | HybridTransaction,
+  filter: ClearedFilter | undefined
+): boolean {
+  if (!filter) return true;
+  if (filter === "unreconciled") return txn.cleared !== "reconciled";
+  return txn.cleared === filter;
+}
+
 function formatTransaction(t: TransactionDetail | HybridTransaction): string {
-  const cleared = t.cleared === "cleared" ? "C" : t.cleared === "reconciled" ? "R" : " ";
-  const approved = t.approved ? "A" : " ";
+  const status = `${t.cleared}+${t.approved ? "approved" : "unapproved"}`;
   const flag = t.flag_color ? ` [${t.flag_color}]` : "";
-  return `- ${t.date} | ${formatCurrency(t.amount)} | ${t.payee_name ?? "No payee"} | ${t.category_name ?? "Uncategorized"} | ${t.account_name} [${cleared}${approved}]${flag} ${t.memo ? `"${t.memo}"` : ""} [ID: ${t.id}]`;
+  return `- ${t.date} | ${formatCurrency(t.amount)} | ${t.payee_name ?? "No payee"} | ${t.category_name ?? "Uncategorized"} | ${t.account_name} [${status}]${flag} ${t.memo ? `"${t.memo}"` : ""} [ID: ${t.id}]`;
 }
 
 export function registerTransactionTools(server: McpServer) {
@@ -23,19 +37,22 @@ export function registerTransactionTools(server: McpServer) {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       since_date: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD)"),
       type: z.enum(TRANSACTION_TYPES).optional().describe("Filter by 'uncategorized' or 'unapproved'"),
+      cleared: z.enum(CLEARED_FILTER_VALUES).optional().describe(CLEARED_FILTER_DESC),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ budget_id, since_date, type, last_knowledge_of_server }) => {
+  }, async ({ budget_id, since_date, type, cleared, last_knowledge_of_server }) => {
     try {
       const response = await getClient().transactions.getTransactions(
         budget_id, since_date, type, last_knowledge_of_server
       );
-      const txns = response.data.transactions;
+      const allTxns = response.data.transactions;
+      const txns = allTxns.filter((t) => matchesClearedFilter(t, cleared));
       if (txns.length === 0) return textResult("No transactions found.");
       const lines = txns.map(formatTransaction);
+      const filterNote = cleared ? ` (filtered to cleared=${cleared}, ${txns.length} of ${allTxns.length})` : "";
       return textResult(
-        `Transactions (${txns.length}):\n${lines.join("\n")}\n\nServer Knowledge: ${response.data.server_knowledge}`
+        `Transactions (${txns.length})${filterNote}:\n${lines.join("\n")}\n\nServer Knowledge: ${response.data.server_knowledge}`
       );
     } catch (e: any) {
       return errorResult(e);
@@ -292,24 +309,29 @@ export function registerTransactionTools(server: McpServer) {
 
   server.registerTool("list_account_transactions", {
     title: "List Account Transactions",
-    description: "[1 API call] List transactions for a specific account",
+    description:
+      "[1 API call] List transactions for a specific account. " +
+      "Pass cleared='unreconciled' to get exactly the transactions still pending the next reconciliation.",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       account_id: z.string().describe("The account ID"),
       since_date: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD)"),
       type: z.enum(TRANSACTION_TYPES).optional().describe("Filter by type"),
+      cleared: z.enum(CLEARED_FILTER_VALUES).optional().describe(CLEARED_FILTER_DESC),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ budget_id, account_id, since_date, type, last_knowledge_of_server }) => {
+  }, async ({ budget_id, account_id, since_date, type, cleared, last_knowledge_of_server }) => {
     try {
       const response = await getClient().transactions.getTransactionsByAccount(
         budget_id, account_id, since_date, type, last_knowledge_of_server
       );
-      const txns = response.data.transactions;
+      const allTxns = response.data.transactions;
+      const txns = allTxns.filter((t) => matchesClearedFilter(t, cleared));
       if (txns.length === 0) return textResult("No transactions found for this account.");
       const lines = txns.map(formatTransaction);
-      return textResult(`Account Transactions (${txns.length}):\n${lines.join("\n")}`);
+      const filterNote = cleared ? ` (filtered to cleared=${cleared}, ${txns.length} of ${allTxns.length})` : "";
+      return textResult(`Account Transactions (${txns.length})${filterNote}:\n${lines.join("\n")}`);
     } catch (e: any) {
       return errorResult(e);
     }
@@ -323,18 +345,21 @@ export function registerTransactionTools(server: McpServer) {
       category_id: z.string().describe("The category ID"),
       since_date: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD)"),
       type: z.enum(TRANSACTION_TYPES).optional().describe("Filter by type"),
+      cleared: z.enum(CLEARED_FILTER_VALUES).optional().describe(CLEARED_FILTER_DESC),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ budget_id, category_id, since_date, type, last_knowledge_of_server }) => {
+  }, async ({ budget_id, category_id, since_date, type, cleared, last_knowledge_of_server }) => {
     try {
       const response = await getClient().transactions.getTransactionsByCategory(
         budget_id, category_id, since_date, type, last_knowledge_of_server
       );
-      const txns = response.data.transactions;
+      const allTxns = response.data.transactions;
+      const txns = allTxns.filter((t) => matchesClearedFilter(t, cleared));
       if (txns.length === 0) return textResult("No transactions found for this category.");
       const lines = txns.map(formatTransaction);
-      return textResult(`Category Transactions (${txns.length}):\n${lines.join("\n")}`);
+      const filterNote = cleared ? ` (filtered to cleared=${cleared}, ${txns.length} of ${allTxns.length})` : "";
+      return textResult(`Category Transactions (${txns.length})${filterNote}:\n${lines.join("\n")}`);
     } catch (e: any) {
       return errorResult(e);
     }
@@ -348,18 +373,21 @@ export function registerTransactionTools(server: McpServer) {
       payee_id: z.string().describe("The payee ID"),
       since_date: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD)"),
       type: z.enum(TRANSACTION_TYPES).optional().describe("Filter by type"),
+      cleared: z.enum(CLEARED_FILTER_VALUES).optional().describe(CLEARED_FILTER_DESC),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ budget_id, payee_id, since_date, type, last_knowledge_of_server }) => {
+  }, async ({ budget_id, payee_id, since_date, type, cleared, last_knowledge_of_server }) => {
     try {
       const response = await getClient().transactions.getTransactionsByPayee(
         budget_id, payee_id, since_date, type, last_knowledge_of_server
       );
-      const txns = response.data.transactions;
+      const allTxns = response.data.transactions;
+      const txns = allTxns.filter((t) => matchesClearedFilter(t, cleared));
       if (txns.length === 0) return textResult("No transactions found for this payee.");
       const lines = txns.map(formatTransaction);
-      return textResult(`Payee Transactions (${txns.length}):\n${lines.join("\n")}`);
+      const filterNote = cleared ? ` (filtered to cleared=${cleared}, ${txns.length} of ${allTxns.length})` : "";
+      return textResult(`Payee Transactions (${txns.length})${filterNote}:\n${lines.join("\n")}`);
     } catch (e: any) {
       return errorResult(e);
     }
@@ -373,18 +401,21 @@ export function registerTransactionTools(server: McpServer) {
       month: z.string().describe("Month in YYYY-MM-DD format (first of month)"),
       since_date: z.string().optional().describe("Only return transactions on or after this date"),
       type: z.enum(TRANSACTION_TYPES).optional().describe("Filter by type"),
+      cleared: z.enum(CLEARED_FILTER_VALUES).optional().describe(CLEARED_FILTER_DESC),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ budget_id, month, since_date, type, last_knowledge_of_server }) => {
+  }, async ({ budget_id, month, since_date, type, cleared, last_knowledge_of_server }) => {
     try {
       const response = await getClient().transactions.getTransactionsByMonth(
         budget_id, month, since_date, type, last_knowledge_of_server
       );
-      const txns = response.data.transactions;
+      const allTxns = response.data.transactions;
+      const txns = allTxns.filter((t) => matchesClearedFilter(t, cleared));
       if (txns.length === 0) return textResult(`No transactions found for ${month}.`);
       const lines = txns.map(formatTransaction);
-      return textResult(`Month Transactions for ${month} (${txns.length}):\n${lines.join("\n")}`);
+      const filterNote = cleared ? ` (filtered to cleared=${cleared}, ${txns.length} of ${allTxns.length})` : "";
+      return textResult(`Month Transactions for ${month} (${txns.length})${filterNote}:\n${lines.join("\n")}`);
     } catch (e: any) {
       return errorResult(e);
     }

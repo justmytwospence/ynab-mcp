@@ -121,6 +121,40 @@ export function registerPrompts(server: McpServer) {
     ],
   }));
 
+  server.registerPrompt("reconcile-account", {
+    title: "Reconcile Account",
+    description:
+      "Walk through reconciling a YNAB account against a bank balance: diagnose discrepancies, identify missing transactions, and close out",
+    argsSchema: {
+      budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
+      account_id: z.string().describe("The account to reconcile"),
+      target_balance: z.string().describe("The actual balance from the bank as a dollar amount (e.g. '-4499.74' for a credit card)"),
+    },
+  }, async ({ budget_id, account_id, target_balance }) => ({
+    messages: [
+      {
+        role: "user" as const,
+        content: {
+          type: "text" as const,
+          text: [
+            `Reconcile account "${account_id}" in budget "${budget_id}" against bank balance ${target_balance}. Follow these steps:`,
+            "",
+            `1. Run audit_account_reconciliation with budget_id="${budget_id}", account_id="${account_id}", target_balance=${target_balance}, apply=false.`,
+            "2. If the discrepancy is $0, ask the user if they want to apply (which will mark all cleared transactions as reconciled).",
+            "3. If there is a discrepancy:",
+            "   a. Show the unreconciled cleared transactions and the size/direction of the gap.",
+            "   b. Ask the user to paste their bank statement transactions for the relevant window, or to confirm if they want to absorb the gap into a balance adjustment.",
+            "   c. If the user pastes bank transactions, compare line-by-line with the unreconciled list to find missing/extra transactions.",
+            "   d. Help the user add any missing transactions via create_transactions before reconciling.",
+            "4. Only after the user confirms, run audit_account_reconciliation again with apply=true.",
+            "",
+            "Always confirm before mutating state. Show the user the planned adjustment amount before applying.",
+          ].join("\n"),
+        },
+      },
+    ],
+  }));
+
   server.registerPrompt("credit-card-audit", {
     title: "Credit Card Payment Audit",
     description:

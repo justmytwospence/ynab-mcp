@@ -14,6 +14,7 @@ import { registerScheduledTransactionTools } from "./tools/scheduled-transaction
 import { registerWorkflowTools } from "./workflows/merge-category.js";
 import { registerDeleteCategoryTool } from "./workflows/delete-category.js";
 import { registerCreditCardAuditTools } from "./workflows/audit-credit-card-payments.js";
+import { registerAccountReconciliationAuditTool } from "./workflows/audit-account-reconciliation.js";
 import { registerApiUsageTools } from "./tools/api-usage.js";
 import { registerResources } from "./resources.js";
 import { registerPrompts } from "./prompts.js";
@@ -42,6 +43,7 @@ registerScheduledTransactionTools(server);
 registerWorkflowTools(server);
 registerDeleteCategoryTool(server);
 registerCreditCardAuditTools(server);
+registerAccountReconciliationAuditTool(server);
 registerApiUsageTools(server);
 registerResources(server);
 registerPrompts(server);

@@ -58,7 +58,7 @@ Add to your `claude_desktop_config.json`:
 
 ## Tools
 
-50 tools covering the full YNAB API. All monetary amounts use YNAB's milliunits format (e.g., `$12.34` = `12340`).
+49 tools covering the full YNAB API. All monetary amounts use YNAB's milliunits format (e.g., `$12.34` = `12340`).
 
 ### Rate limit awareness
 
@@ -173,6 +173,7 @@ Each tool's description includes its API call cost in brackets (e.g. `[1 API cal
 | `merge_category` | Merge a source category into a target, moving all transactions and budgeted amounts |
 | `delete_category` | Clean up a category for deletion: re-categorizes all history to a replacement and zeros budgets (final delete is manual in the YNAB app — API limitation) |
 | `audit_credit_card_payments` | Audit CC payment category balances against card balances, with optional auto-fix |
+| `audit_account_reconciliation` | Diagnose an account's reconciliation state (cleared vs. bank balance, unreconciled txn list) with optional close-out |
 
 ## Resources
 
@@ -196,6 +197,7 @@ Prompts are guided workflow templates that users can invoke to walk through comm
 | `budget-setup-guide` | `budget_id` | Guided walkthrough: accounts, categories, targets, scheduled transactions, fund allocation |
 | `spending-analysis` | `budget_id`, `month` | Category breakdown, budget vs. actual, top payees, income vs. spending |
 | `credit-card-audit` | `budget_id`, `since_month`? | Audit CC payment category balances with dry-run-first, confirm-before-apply flow |
+| `reconcile-account` | `budget_id`, `account_id`, `target_balance` | Walk through reconciling an account against a bank balance, with missing-transaction triage |
 
 ## Development
 

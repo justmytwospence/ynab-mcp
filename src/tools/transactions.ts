@@ -257,11 +257,16 @@ export function registerTransactionTools(server: McpServer) {
   }, async ({ budget_id, transactions }) => {
     try {
       const response = await getClient().transactions.updateTransactions(budget_id, {
-        transactions: transactions.map((t) => ({
-          ...t,
-          amount: t.amount != null ? dollarsToMilliunits(t.amount) : undefined,
-          ...(t.flag_color !== undefined && { flag_color: t.flag_color }),
-        })),
+        transactions: transactions.map((t) => {
+          const { amount, flag_color, ...rest } = t;
+          return {
+            ...rest,
+            ...(amount != null ? { amount: dollarsToMilliunits(amount) } : {}),
+            // Only send flag_color when the caller supplied it; an explicit
+            // null clears the flag in YNAB.
+            ...(flag_color !== undefined ? { flag_color } : {}),
+          };
+        }),
       });
       const updated = response.data.transactions;
       return textResult(`Updated ${updated?.length ?? 0} transaction(s).`);

@@ -14,7 +14,7 @@ export function registerCategoryTools(server: McpServer) {
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       include_hidden: z.boolean().default(true).describe("Include hidden categories and groups (default: true)"),
-      include_internal: z.boolean().default(true).describe("Include internal category groups such as Credit Card Payments (default: true)"),
+      include_internal: z.boolean().default(true).describe("Include internal categories and groups - Credit Card Payments and Inflow: Ready to Assign (default: true). Exclude them from spending analysis, or Ready to Assign reads as the largest expense."),
       include_deleted: z.boolean().default(false).describe("Include deleted categories and groups (only present in delta requests)"),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
     },
@@ -32,6 +32,7 @@ export function registerCategoryTools(server: McpServer) {
         if (group.categories) {
           for (const cat of group.categories) {
             if (cat.hidden && !include_hidden) continue;
+            if (cat.internal && !include_internal) continue;
             if (cat.deleted && !include_deleted) continue;
             const budgeted = formatCurrency(cat.budgeted);
             const activity = formatCurrency(cat.activity);

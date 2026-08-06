@@ -2,6 +2,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getClient } from "../ynab-client.js";
 import { textResult, errorResult, formatCurrency } from "../utils/formatting.js";
+import { getBudgetSnapshot, snapshotMonths } from "../budget-snapshot.js";
 
 export function registerBudgetTools(server: McpServer) {
   server.registerTool("list_budgets", {
@@ -33,16 +34,21 @@ export function registerBudgetTools(server: McpServer) {
 
   server.registerTool("get_budget", {
     title: "Get Budget",
-    description: "[1 API call] Get a single budget's full detail including all entities. Use 'last-used' for the most recently accessed budget.",
+    description:
+      "[1 API call, cached] Get a single budget's full detail: every account, category, payee, transaction, " +
+      "and every budget month with its per-category budgeted/activity/balance. The response is cached in " +
+      "memory and refreshed by delta, so repeat calls and the workflows built on it cost one request or none. " +
+      "Use 'last-used' for the most recently accessed budget.",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
-      last_knowledge_of_server: z.number().optional().describe("Delta request - only return entities changed since this server knowledge value"),
+      force_refresh: z.boolean().default(false).describe("Discard the cached snapshot and refetch the full export"),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ budget_id, last_knowledge_of_server }) => {
+  }, async ({ budget_id, force_refresh }) => {
     try {
-      const response = await getClient().plans.getPlanById(budget_id, last_knowledge_of_server);
-      const b = response.data.plan;
+      const { snapshot, apiCalls } = await getBudgetSnapshot(budget_id, { forceFull: force_refresh });
+      const b = snapshot.plan;
+      const months = snapshotMonths(snapshot);
       const summary = [
         `Budget: ${b.name}`,
         `ID: ${b.id}`,
@@ -52,7 +58,11 @@ export function registerBudgetTools(server: McpServer) {
         `Payees: ${b.payees?.length ?? 0}`,
         `Transactions: ${b.transactions?.length ?? 0}`,
         `Scheduled Transactions: ${b.scheduled_transactions?.length ?? 0}`,
-        `Server Knowledge: ${response.data.server_knowledge}`,
+        months.length > 0
+          ? `Months: ${months.length} (${months[0]!.month} to ${months[months.length - 1]!.month}), with per-category detail`
+          : `Months: 0`,
+        `Server Knowledge: ${snapshot.serverKnowledge}`,
+        `API calls used: ${apiCalls}`,
       ];
       return textResult(summary.join("\n"));
     } catch (e: any) {

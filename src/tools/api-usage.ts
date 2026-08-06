@@ -7,7 +7,9 @@ export function registerApiUsageTools(server: McpServer) {
     title: "Get API Usage",
     description:
       "[0 API calls] Check current YNAB API usage against the 200 calls/hour rate limit. " +
-      "Use this before batch operations to ensure you have enough budget.",
+      "Use this before batch operations to ensure you have enough budget. " +
+      "This counts only requests made by this process: the limit is per access token, so the user's own YNAB " +
+      "web and mobile sessions consume the same quota invisibly. Treat the count as a lower bound.",
     inputSchema: {},
     annotations: { readOnlyHint: true },
   }, async () => {
@@ -20,6 +22,18 @@ export function registerApiUsageTools(server: McpServer) {
     ];
     if (usage.windowResetsAt) {
       lines.push(`  Next call expires at: ${usage.windowResetsAt}`);
+    }
+    lines.push(
+      `  Counts this process only; the limit is per access token and is shared with the YNAB app.`
+    );
+    if (usage.lastRateLimitAt) {
+      lines.push(`  Rate limited (429) at ${usage.lastRateLimitAt} - the real usage is higher than the count above.`);
+    }
+    if (usage.lastDataLimitAt) {
+      lines.push(
+        `  Data limit reached (403) at ${usage.lastDataLimitAt} - this is an abuse-prevention data limit,`,
+        `  not the rate limit. Retrying will not clear it.`
+      );
     }
     return textResult(lines.join("\n"));
   });

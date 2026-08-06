@@ -16,36 +16,102 @@
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 
-function loadToken(): string {
-  if (process.env.YNAB_API_TOKEN) return process.env.YNAB_API_TOKEN;
-
-  const candidates = [
-    `${homedir()}/Library/Application Support/Claude/claude_desktop_config.json`,
-    `${homedir()}/.claude.json`,
+/** Config files an MCP harness might keep a YNAB token in. */
+function configPaths(): string[] {
+  const home = homedir();
+  const paths = [
+    `${home}/Library/Application Support/Claude/claude_desktop_config.json`,
+    `${home}/.claude.json`,
+    `${home}/.claude/settings.json`,
+    `${home}/.claude/settings.local.json`,
+    `${home}/.claude/mcp.json`,
+    `${home}/.config/claude/claude_desktop_config.json`,
+    `${home}/.cursor/mcp.json`,
+    `${home}/.codex/config.toml`,
+    `${home}/.vscode/mcp.json`,
+    `${home}/Library/Application Support/Code/User/mcp.json`,
   ];
-  for (const path of candidates) {
-    let config: any;
+  // .mcp.json and .env alongside this repo and its siblings, plus the sibling
+  // ynab projects the harness may actually be configured in.
+  for (const dir of [process.cwd(), `${home}/Projects/ynab-mcp`, `${home}/Projects/ynab-bot`, `${home}/Projects/.agents`]) {
+    paths.push(`${dir}/.mcp.json`, `${dir}/.env`, `${dir}/.env.local`);
+  }
+  return paths;
+}
+
+/** Any string under a key that looks like a YNAB token, however it is nested. */
+function findTokenDeep(node: unknown, keyPath: string[] = []): { token: string; where: string } | null {
+  if (typeof node === "string") {
+    const context = keyPath.join(".");
+    const looksLikeKey = /ynab/i.test(context) && /token|key|secret|pat/i.test(context);
+    if (looksLikeKey && node.length > 20 && !/\$\{|^~|\//.test(node)) {
+      return { token: node, where: context };
+    }
+    return null;
+  }
+  if (Array.isArray(node)) {
+    for (const [i, child] of node.entries()) {
+      const hit = findTokenDeep(child, [...keyPath, String(i)]);
+      if (hit) return hit;
+    }
+    return null;
+  }
+  if (node && typeof node === "object") {
+    for (const [key, child] of Object.entries(node)) {
+      const hit = findTokenDeep(child, [...keyPath, key]);
+      if (hit) return hit;
+    }
+  }
+  return null;
+}
+
+/** KEY=value lines, for .env and TOML-ish files. */
+function findTokenFlat(text: string): { token: string; where: string } | null {
+  for (const line of text.split("\n")) {
+    const match = line.match(/^\s*(?:export\s+)?["']?([A-Za-z0-9_.]*YNAB[A-Za-z0-9_.]*)["']?\s*[=:]\s*["']?([^"'\s#]+)/i);
+    if (match && /token|key|secret|pat/i.test(match[1]!) && match[2]!.length > 20) {
+      return { token: match[2]!, where: match[1]! };
+    }
+  }
+  return null;
+}
+
+function loadToken(): string {
+  if (process.env.YNAB_API_TOKEN) {
+    console.log("Using the token from $YNAB_API_TOKEN.\n");
+    return process.env.YNAB_API_TOKEN;
+  }
+
+  const checked: string[] = [];
+  for (const path of configPaths()) {
+    let text: string;
     try {
-      config = JSON.parse(readFileSync(path, "utf8"));
+      text = readFileSync(path, "utf8");
     } catch {
       continue;
     }
-    const servers = { ...(config.mcpServers ?? {}) };
-    for (const project of Object.values(config.projects ?? {}) as any[]) {
-      Object.assign(servers, project?.mcpServers ?? {});
+    checked.push(path);
+
+    let hit: { token: string; where: string } | null = null;
+    try {
+      hit = findTokenDeep(JSON.parse(text));
+    } catch {
+      hit = null;
     }
-    for (const [name, server] of Object.entries(servers) as Array<[string, any]>) {
-      const env = server?.env ?? {};
-      for (const [key, value] of Object.entries(env) as Array<[string, string]>) {
-        if (/ynab/i.test(name + key) && typeof value === "string" && value.length > 20) {
-          console.log(`Using the token from ${path} (server "${name}", env ${key}).\n`);
-          return value;
-        }
-      }
+    hit ??= findTokenFlat(text);
+
+    if (hit) {
+      console.log(`Using the token from ${path} (at ${hit.where}).\n`);
+      return hit.token;
     }
   }
+
   throw new Error(
-    "No YNAB token found. Set YNAB_API_TOKEN, or add it to the ynab MCP server's env in the Claude desktop config."
+    `No YNAB token found. Checked these existing files and found nothing token-shaped under a YNAB-ish key:\n` +
+      checked.map((p) => `  ${p}`).join("\n") +
+      `\n\nEasiest fix - run it with the token in the environment:\n` +
+      `  YNAB_API_TOKEN=<token> npx tsx scripts/live-check.ts\n` +
+      `Or tell me which file holds it and I will read that one.`
   );
 }
 

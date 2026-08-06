@@ -98,28 +98,39 @@ export function registerCategoryTools(server: McpServer) {
 
   server.registerTool("update_category", {
     title: "Update Category",
-    description: "[1 API call] Update an existing category's name, note, or goal",
+    description:
+      "[1 API call] Update an existing category. This is the full writable surface: name, note, " +
+      "category_group_id (moves the category to another group), goal_target, goal_target_date, and " +
+      "goal_needs_whole_amount. Setting goal_target on a category with no goal creates a monthly goal " +
+      "('NEED', or 'MF' for Credit Card Payment categories). A goal's type, cadence, and day are read-only " +
+      "and cannot be changed once the goal exists. There is no way to hide or delete a category via the API.",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       category_id: z.string().describe("The category ID to update"),
       name: z.string().optional().describe("New category name"),
       note: z.string().optional().describe("New category note"),
+      category_group_id: z.string().optional().describe("Move the category to this category group (internal groups are not permitted)"),
       goal_target: z.number().optional().describe("New goal target in dollars"),
       goal_target_date: z.string().optional().describe("New goal target date (YYYY-MM-DD)"),
+      goal_needs_whole_amount: z.boolean().optional().describe("NEED goals only: true = 'Set aside another...', false = 'Refill up to...'"),
     },
     annotations: { readOnlyHint: false },
-  }, async ({ budget_id, category_id, name, note, goal_target, goal_target_date }) => {
+  }, async ({ budget_id, category_id, name, note, category_group_id, goal_target, goal_target_date, goal_needs_whole_amount }) => {
     try {
       const response = await getClient().categories.updateCategory(budget_id, category_id, {
         category: {
           name,
           note,
+          category_group_id,
           goal_target: goal_target != null ? dollarsToMilliunits(goal_target) : undefined,
           goal_target_date,
+          goal_needs_whole_amount,
         },
       });
       const c = response.data.category;
-      return textResult(`Updated category "${c.name}"\nID: ${c.id}`);
+      return textResult(
+        `Updated category "${c.name}" (group: ${c.category_group_name ?? c.category_group_id})\nID: ${c.id}`
+      );
     } catch (e: any) {
       return errorResult(e);
     }

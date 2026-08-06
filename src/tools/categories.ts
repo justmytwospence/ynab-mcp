@@ -1,6 +1,7 @@
 import { z } from "zod";
+import type { CategoryResponse } from "ynab";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
-import { getClient } from "../ynab-client.js";
+import { getClient, requestUntyped } from "../ynab-client.js";
 import { textResult, errorResult, formatCurrency, dollarsToMilliunits, attributes } from "../utils/formatting.js";
 
 export function registerCategoryTools(server: McpServer) {
@@ -100,15 +101,18 @@ export function registerCategoryTools(server: McpServer) {
     try {
       const invalid = validateGoalFrequency(goal_frequency, goal_target, goal_target_date);
       if (invalid) return errorResult(invalid);
-      const response = await getClient().categories.createCategory(budget_id, {
-        category: withGoalFrequency({
-          name,
-          category_group_id,
-          note,
-          goal_target: goal_target != null ? dollarsToMilliunits(goal_target) : undefined,
-          goal_target_date,
-        }, goal_frequency),
-      });
+      const category = {
+        name,
+        category_group_id,
+        note,
+        goal_target: goal_target != null ? dollarsToMilliunits(goal_target) : undefined,
+        goal_target_date,
+      };
+      const response = goal_frequency
+        ? await requestUntyped<CategoryResponse>("POST", `/plans/${budget_id}/categories`, {
+            category: { ...category, goal_frequency },
+          })
+        : await getClient().categories.createCategory(budget_id, { category });
       const c = response.data.category;
       return textResult(`Created category "${c.name}"\nID: ${c.id}`);
     } catch (e: any) {
@@ -142,16 +146,19 @@ export function registerCategoryTools(server: McpServer) {
     try {
       const invalid = validateGoalFrequency(goal_frequency, goal_target, goal_target_date);
       if (invalid) return errorResult(invalid);
-      const response = await getClient().categories.updateCategory(budget_id, category_id, {
-        category: withGoalFrequency({
-          name,
-          note,
-          category_group_id,
-          goal_target: goal_target != null ? dollarsToMilliunits(goal_target) : undefined,
-          goal_target_date,
-          goal_needs_whole_amount,
-        }, goal_frequency),
-      });
+      const category = {
+        name,
+        note,
+        category_group_id,
+        goal_target: goal_target != null ? dollarsToMilliunits(goal_target) : undefined,
+        goal_target_date,
+        goal_needs_whole_amount,
+      };
+      const response = goal_frequency
+        ? await requestUntyped<CategoryResponse>("PATCH", `/plans/${budget_id}/categories/${category_id}`, {
+            category: { ...category, goal_frequency },
+          })
+        : await getClient().categories.updateCategory(budget_id, category_id, { category });
       const c = response.data.category;
       return textResult(
         `Updated category "${c.name}" (group: ${c.category_group_name ?? c.category_group_id})\nID: ${c.id}`
@@ -260,16 +267,6 @@ export function registerCategoryTools(server: McpServer) {
       return errorResult(e);
     }
   });
-}
-
-/**
- * goal_frequency was added to the category create/update bodies in server
- * v1.86.0 but is absent from the SDK 4.5.0 models, so it has to be attached
- * past the type. The SDK is a version behind the API here, not the other way
- * around: the live OpenAPI spec is the authority.
- */
-function withGoalFrequency<T extends object>(category: T, goalFrequency: string | undefined): T {
-  return goalFrequency ? ({ ...category, goal_frequency: goalFrequency } as T) : category;
 }
 
 /** The spec's stated constraints on goal_frequency, checked before the write. */

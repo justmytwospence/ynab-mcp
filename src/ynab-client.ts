@@ -43,3 +43,33 @@ export function getMoneyMovementsClient(): MoneyMovementsApi {
   }
   return moneyMovementsApi;
 }
+
+/**
+ * Send a request the generated SDK cannot express.
+ *
+ * The SDK's *ToJSON serializers emit only the fields they know about, so a
+ * property attached past the type is silently dropped on the way out - the
+ * request succeeds and the field never reaches YNAB. Fields the live API has
+ * but the pinned SDK does not (goal_frequency, added in server v1.86.0) have to
+ * bypass the serializer entirely.
+ *
+ * Uses the same token and the same tracked fetch, so these requests count
+ * against the rate limit and get the same non-JSON error handling.
+ */
+export async function requestUntyped<T>(
+  method: "POST" | "PATCH" | "PUT",
+  path: string,
+  body: unknown
+): Promise<T> {
+  const response = await apiUsageTracker.wrappedFetch(`https://api.ynab.com/v1${path}`, {
+    method,
+    headers: {
+      Authorization: `Bearer ${getToken()}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  const json = await response.json();
+  if (!response.ok) throw json;
+  return json as T;
+}

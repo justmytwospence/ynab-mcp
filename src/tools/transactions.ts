@@ -36,16 +36,21 @@ export function registerTransactionTools(server: McpServer) {
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       since_date: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD)"),
+      until_date: z.string().optional().describe("Only return transactions on or before this date (YYYY-MM-DD)"),
       type: z.enum(TRANSACTION_TYPES).optional().describe("Filter by 'uncategorized' or 'unapproved'"),
       cleared: z.enum(CLEARED_FILTER_VALUES).optional().describe(CLEARED_FILTER_DESC),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ budget_id, since_date, type, cleared, last_knowledge_of_server }) => {
+  }, async ({ budget_id, since_date, until_date, type, cleared, last_knowledge_of_server }) => {
     try {
-      const response = await getClient().transactions.getTransactions(
-        budget_id, since_date, type, last_knowledge_of_server
-      );
+      const response = await getClient().transactions.getTransactionsRaw({
+        planId: budget_id,
+        sinceDate: since_date,
+        untilDate: until_date,
+        type,
+        lastKnowledgeOfServer: last_knowledge_of_server,
+      }).then((r) => r.value());
       const allTxns = response.data.transactions;
       const txns = allTxns.filter((t) => matchesClearedFilter(t, cleared));
       if (txns.length === 0) return textResult("No transactions found.");
@@ -321,16 +326,22 @@ export function registerTransactionTools(server: McpServer) {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       account_id: z.string().describe("The account ID"),
       since_date: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD)"),
+      until_date: z.string().optional().describe("Only return transactions on or before this date (YYYY-MM-DD)"),
       type: z.enum(TRANSACTION_TYPES).optional().describe("Filter by type"),
       cleared: z.enum(CLEARED_FILTER_VALUES).optional().describe(CLEARED_FILTER_DESC),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ budget_id, account_id, since_date, type, cleared, last_knowledge_of_server }) => {
+  }, async ({ budget_id, account_id, since_date, until_date, type, cleared, last_knowledge_of_server }) => {
     try {
-      const response = await getClient().transactions.getTransactionsByAccount(
-        budget_id, account_id, since_date, type, last_knowledge_of_server
-      );
+      const response = await getClient().transactions.getTransactionsByAccountRaw({
+        planId: budget_id,
+        accountId: account_id,
+        sinceDate: since_date,
+        untilDate: until_date,
+        type,
+        lastKnowledgeOfServer: last_knowledge_of_server,
+      }).then((r) => r.value());
       const allTxns = response.data.transactions;
       const txns = allTxns.filter((t) => matchesClearedFilter(t, cleared));
       if (txns.length === 0) return textResult("No transactions found for this account.");
@@ -349,16 +360,22 @@ export function registerTransactionTools(server: McpServer) {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       category_id: z.string().describe("The category ID"),
       since_date: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD)"),
+      until_date: z.string().optional().describe("Only return transactions on or before this date (YYYY-MM-DD)"),
       type: z.enum(TRANSACTION_TYPES).optional().describe("Filter by type"),
       cleared: z.enum(CLEARED_FILTER_VALUES).optional().describe(CLEARED_FILTER_DESC),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ budget_id, category_id, since_date, type, cleared, last_knowledge_of_server }) => {
+  }, async ({ budget_id, category_id, since_date, until_date, type, cleared, last_knowledge_of_server }) => {
     try {
-      const response = await getClient().transactions.getTransactionsByCategory(
-        budget_id, category_id, since_date, type, last_knowledge_of_server
-      );
+      const response = await getClient().transactions.getTransactionsByCategoryRaw({
+        planId: budget_id,
+        categoryId: category_id,
+        sinceDate: since_date,
+        untilDate: until_date,
+        type,
+        lastKnowledgeOfServer: last_knowledge_of_server,
+      }).then((r) => r.value());
       const allTxns = response.data.transactions;
       const txns = allTxns.filter((t) => matchesClearedFilter(t, cleared));
       if (txns.length === 0) return textResult("No transactions found for this category.");
@@ -377,16 +394,22 @@ export function registerTransactionTools(server: McpServer) {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       payee_id: z.string().describe("The payee ID"),
       since_date: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD)"),
+      until_date: z.string().optional().describe("Only return transactions on or before this date (YYYY-MM-DD)"),
       type: z.enum(TRANSACTION_TYPES).optional().describe("Filter by type"),
       cleared: z.enum(CLEARED_FILTER_VALUES).optional().describe(CLEARED_FILTER_DESC),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ budget_id, payee_id, since_date, type, cleared, last_knowledge_of_server }) => {
+  }, async ({ budget_id, payee_id, since_date, until_date, type, cleared, last_knowledge_of_server }) => {
     try {
-      const response = await getClient().transactions.getTransactionsByPayee(
-        budget_id, payee_id, since_date, type, last_knowledge_of_server
-      );
+      const response = await getClient().transactions.getTransactionsByPayeeRaw({
+        planId: budget_id,
+        payeeId: payee_id,
+        sinceDate: since_date,
+        untilDate: until_date,
+        type,
+        lastKnowledgeOfServer: last_knowledge_of_server,
+      }).then((r) => r.value());
       const allTxns = response.data.transactions;
       const txns = allTxns.filter((t) => matchesClearedFilter(t, cleared));
       if (txns.length === 0) return textResult("No transactions found for this payee.");
@@ -405,16 +428,22 @@ export function registerTransactionTools(server: McpServer) {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       month: z.string().describe("Month in YYYY-MM-DD format (first of month)"),
       since_date: z.string().optional().describe("Only return transactions on or after this date"),
+      until_date: z.string().optional().describe("Only return transactions on or before this date (YYYY-MM-DD)"),
       type: z.enum(TRANSACTION_TYPES).optional().describe("Filter by type"),
       cleared: z.enum(CLEARED_FILTER_VALUES).optional().describe(CLEARED_FILTER_DESC),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ budget_id, month, since_date, type, cleared, last_knowledge_of_server }) => {
+  }, async ({ budget_id, month, since_date, until_date, type, cleared, last_knowledge_of_server }) => {
     try {
-      const response = await getClient().transactions.getTransactionsByMonth(
-        budget_id, month, since_date, type, last_knowledge_of_server
-      );
+      const response = await getClient().transactions.getTransactionsByMonthRaw({
+        planId: budget_id,
+        month,
+        sinceDate: since_date,
+        untilDate: until_date,
+        type,
+        lastKnowledgeOfServer: last_knowledge_of_server,
+      }).then((r) => r.value());
       const allTxns = response.data.transactions;
       const txns = allTxns.filter((t) => matchesClearedFilter(t, cleared));
       if (txns.length === 0) return textResult(`No transactions found for ${month}.`);

@@ -20,7 +20,7 @@
   ],
   "dependencies": {
     "@modelcontextprotocol/sdk": "^1.27.1",
-    "ynab": "^4.0.0",
+    "ynab": "^4.5.0",
     "zod": "^4.3.6"
   },
   "devDependencies": {

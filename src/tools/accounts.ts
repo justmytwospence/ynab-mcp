@@ -4,10 +4,10 @@ import { getClient } from "../ynab-client.js";
 import { textResult, errorResult, formatCurrency } from "../utils/formatting.js";
 import { getReconciliationAnchor } from "../workflows/lib/reconciliation.js";
 
-const ACCOUNT_TYPES = [
-  "checking", "savings", "cash", "creditCard", "lineOfCredit",
-  "otherAsset", "otherLiability", "mortgage", "autoLoan",
-  "studentLoan", "personalLoan", "medicalDebt", "otherDebt",
+// The create-account endpoint accepts only a subset of AccountType; the debt
+// account types can only be created in the YNAB app.
+const CREATABLE_ACCOUNT_TYPES = [
+  "checking", "savings", "cash", "creditCard", "otherAsset", "otherLiability",
 ] as const;
 
 export function registerAccountTools(server: McpServer) {
@@ -102,7 +102,7 @@ export function registerAccountTools(server: McpServer) {
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       name: z.string().describe("Account name"),
-      type: z.enum(ACCOUNT_TYPES).describe("Account type"),
+      type: z.enum(CREATABLE_ACCOUNT_TYPES).describe("Account type (the API only supports creating these six types)"),
       balance: z.number().describe("Starting balance in dollars (e.g., 1000.50)"),
     },
     annotations: { readOnlyHint: false },

@@ -207,7 +207,7 @@ export function registerTransactionTools(server: McpServer) {
 
   server.registerTool("update_transaction", {
     title: "Update Transaction",
-    description: "[1 API call] Update an existing transaction",
+    description: "[1 API call] Update an existing transaction. " + "Credit Card Payment categories are NOT permitted here and are silently IGNORED rather than rejected, so assigning one reports success and changes nothing. Use update_month_category to assign money to a Credit Card Payment category.",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       transaction_id: z.string().describe("The transaction ID to update"),
@@ -216,7 +216,7 @@ export function registerTransactionTools(server: McpServer) {
       amount: z.number().optional().describe("New amount in dollars"),
       payee_id: z.string().optional().describe("New payee ID"),
       payee_name: z.string().optional().describe("New payee name"),
-      category_id: z.string().optional().describe("New category ID"),
+      category_id: z.string().optional().describe("New category ID (a Credit Card Payment category is silently ignored)"),
       memo: z.string().optional().describe("New memo"),
       cleared: z.enum(CLEARED_VALUES).optional().describe("New cleared status"),
       approved: z.boolean().optional().describe("New approval status"),
@@ -242,7 +242,8 @@ export function registerTransactionTools(server: McpServer) {
 
   server.registerTool("update_transactions", {
     title: "Bulk Update Transactions",
-    description: "[1 API call, bulk] Update multiple transactions at once. Each must include either id or import_id to identify the transaction.",
+    description: "[1 API call, bulk] Update multiple transactions at once. Each must include either id or import_id to identify the transaction. " +
+      "Credit Card Payment categories are NOT permitted here and are silently IGNORED rather than rejected, so assigning one reports success and changes nothing. Use update_month_category to assign money to a Credit Card Payment category.",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       transactions: z.array(z.object({

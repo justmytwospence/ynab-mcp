@@ -48,7 +48,10 @@ export function registerCategoryTools(server: McpServer) {
 
   server.registerTool("get_category", {
     title: "Get Category",
-    description: "[1 API call] Get details for a single category",
+    description:
+      "[1 API call] Get details for a single category. Goal fields describe the goal AS CONFIGURED NOW - the API " +
+      "keeps no target history, so goal figures reported for a month earlier than goal_creation_month describe a " +
+      "target that did not exist then and must not be read as a verdict on that month.",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       category_id: z.string().describe("The category ID"),
@@ -67,6 +70,7 @@ export function registerCategoryTools(server: McpServer) {
         `Goal Type: ${c.goal_type ?? "None"}`,
         `Goal Target: ${c.goal_target != null ? formatCurrency(c.goal_target) : "None"}`,
         `Goal Target Month: ${c.goal_target_month ?? "None"}`,
+        `Goal Created: ${c.goal_creation_month ?? "None"}`,
         `Note: ${c.note ?? "None"}`,
         `Hidden: ${c.hidden}`,
         `Deleted: ${c.deleted}`,
@@ -158,7 +162,10 @@ export function registerCategoryTools(server: McpServer) {
 
   server.registerTool("get_month_category", {
     title: "Get Month Category",
-    description: "[1 API call] Get a category's budget details for a specific month",
+    description:
+      "[1 API call] Get a category's budget details for a specific month. Goal fields reflect the goal as it is " +
+      "configured TODAY, evaluated against that month - there is no target revision history - so a month earlier " +
+      "than goal_creation_month is marked not assessable rather than judged.",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       month: z.string().describe("Month in YYYY-MM-DD format (first of month) or 'current'"),
@@ -177,6 +184,13 @@ export function registerCategoryTools(server: McpServer) {
         `Goal Type: ${c.goal_type ?? "None"}`,
         `Goal Target: ${c.goal_target != null ? formatCurrency(c.goal_target) : "None"}`,
       ];
+      if (c.goal_creation_month != null && month < c.goal_creation_month) {
+        lines.push(
+          `Note: this goal was created in ${c.goal_creation_month}, after ${month}. The API keeps no target`,
+          `history, so these are today's target evaluated against a past month, not the target in force then.`,
+          `Underfunding for ${month} is not assessable.`
+        );
+      }
       return textResult(lines.join("\n"));
     } catch (e: any) {
       return errorResult(e);

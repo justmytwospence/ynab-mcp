@@ -94,9 +94,16 @@ export function registerCreditCardAuditTools(server: McpServer) {
       }
       if (cards.length === 0) return textResult("No on-budget credit card or line of credit accounts found.");
 
-      let months = snapshotMonths(snapshot).map((m) => m.month);
+      const allMonths = snapshotMonths(snapshot).map((m) => m.month);
+      let months = allMonths;
       if (since_month) months = months.filter((m) => m >= since_month);
       if (months.length === 0) return textResult("No months found in the specified range.");
+
+      // The gap is a level, not a signal: only its month-over-month change means
+      // anything. So the first audited month needs the month before it to
+      // subtract from. Without it, a since_month audit reports the whole
+      // accumulated gap as a single drift event at the window boundary.
+      const priorMonth = allMonths[allMonths.indexOf(months[0]!) - 1];
 
       const monthCategories = new Map<string, CategoryBase[]>(
         snapshotMonths(snapshot).map((m) => [m.month, m.categories])
@@ -117,7 +124,7 @@ export function registerCreditCardAuditTools(server: McpServer) {
       ];
       if (toleranceMilliunits > 0) lines.push(`Tolerance: ${formatCurrency(toleranceMilliunits)}`);
 
-      const corrections: Array<{ month: string; categoryId: string; budgeted: number; cardName: string }> = [];
+      const corrections: Correction[] = [];
       const warnings: string[] = [];
       let totalResidualMonths = 0;
 
@@ -135,7 +142,7 @@ export function registerCreditCardAuditTools(server: McpServer) {
           (t) => !t.deleted && t.account_id === card.id
         );
 
-        const walk = forwardBalanceWalk(card, cardTransactions, months);
+        const walk = forwardBalanceWalk(card, cardTransactions, priorMonth ? [priorMonth, ...months] : months);
         lines.push(
           `  Working balance ${formatCurrency(card.balance)} | ` +
             `Cleared ${formatCurrency(card.cleared_balance)} | Uncleared ${formatCurrency(card.uncleared_balance)}`
@@ -170,6 +177,19 @@ export function registerCreditCardAuditTools(server: McpServer) {
         let previousGap: number | null = null;
         let previousBalance = 0;
         let cumulativeDelta = 0; // cascade from corrections made in earlier months
+
+        // Seed from the month before the window so the first audited month
+        // reports a change rather than a level. At the plan's genuine first
+        // month there is nothing to seed from, and the level is correct: it is
+        // the opening debt, which the Starting Balance term below accounts for.
+        if (priorMonth) {
+          const priorCategory = (monthCategories.get(priorMonth) ?? []).find((c) => c.id === categoryId);
+          const priorBalance = walk.balanceAtEndOf.get(priorMonth);
+          if (priorCategory && priorBalance !== undefined) {
+            previousGap = -priorBalance - priorCategory.balance;
+            previousBalance = priorCategory.balance;
+          }
+        }
 
         for (const month of months) {
           const categories = monthCategories.get(month) ?? [];
@@ -216,7 +236,13 @@ export function registerCreditCardAuditTools(server: McpServer) {
             // accepts a negative budgeted, but it is almost never what the user
             // means and it silently moves money out of the month.
             const recommended = Math.max(0, monthCategory.budgeted + residual);
-            corrections.push({ month, categoryId, budgeted: recommended, cardName: card.name });
+            corrections.push({
+              month,
+              categoryId,
+              budgeted: recommended,
+              previousBudgeted: monthCategory.budgeted,
+              cardName: card.name,
+            });
             cumulativeDelta += recommended - monthCategory.budgeted;
             totalResidualMonths += 1;
           }
@@ -230,31 +256,31 @@ export function registerCreditCardAuditTools(server: McpServer) {
         for (const w of warnings) lines.push(`  - ${w}`);
       }
 
-      if (corrections.length > 0) {
-        const rtaBlocked = corrections.filter((c) => {
-          const audit = monthToBeBudgeted.get(c.month) ?? 0;
-          return audit < 0;
-        });
-        if (rtaBlocked.length > 0 && !allow_negative_ready_to_assign) {
+      const { affordable, blocked } = allow_negative_ready_to_assign
+        ? { affordable: corrections, blocked: [] as BlockedCorrection[] }
+        : screenAffordability(corrections, months, monthToBeBudgeted);
+
+      if (blocked.length > 0) {
+        lines.push(
+          ``,
+          `${blocked.length} correction(s) skipped: assigning there would drive Ready to Assign below zero, ` +
+            `in that month or a later one. Set allow_negative_ready_to_assign=true to apply them anyway.`
+        );
+        for (const b of blocked) {
           lines.push(
-            ``,
-            `${rtaBlocked.length} month(s) already have a negative Ready to Assign; assigning more there ` +
-              `would deepen it. Set allow_negative_ready_to_assign=true to correct them anyway.`
+            `  - ${b.correction.month} (${b.correction.cardName}): ` +
+              `+${formatCurrency(b.correction.budgeted - b.correction.previousBudgeted)} would leave ` +
+              `${formatCurrency(b.worstReadyToAssign)} in ${b.worstMonth}`
           );
         }
       }
 
-      if (apply && corrections.length > 0) {
-        lines.push(``, `Applying ${corrections.length} correction(s)...`);
+      if (apply && affordable.length > 0) {
+        lines.push(``, `Applying ${affordable.length} correction(s)...`);
         const applied: string[] = [];
         const failed: string[] = [];
 
-        for (const c of corrections) {
-          const readyToAssign = monthToBeBudgeted.get(c.month) ?? 0;
-          if (readyToAssign < 0 && !allow_negative_ready_to_assign) {
-            failed.push(`${c.month} (${c.cardName}): skipped, Ready to Assign is ${formatCurrency(readyToAssign)}`);
-            continue;
-          }
+        for (const c of affordable) {
           try {
             await getClient().categories.updateMonthCategory(budget_id, c.month, c.categoryId, {
               category: { budgeted: c.budgeted },
@@ -269,17 +295,17 @@ export function registerCreditCardAuditTools(server: McpServer) {
         }
 
         invalidateBudgetSnapshot(budget_id);
-        lines.push(`Applied ${applied.length} of ${corrections.length}:`);
+        lines.push(`Applied ${applied.length} of ${affordable.length}:`);
         for (const a of applied) lines.push(`  ${a}`);
         if (failed.length > 0) {
           lines.push(`Not applied (${failed.length}):`);
           for (const f of failed) lines.push(`  ${f}`);
           lines.push(`Months not listed as applied were left unchanged. Re-run to retry.`);
         }
-      } else if (corrections.length > 0) {
+      } else if (affordable.length > 0) {
         lines.push(
           ``,
-          `Set apply=true to assign money in these ${corrections.length} month(s). This writes to historical ` +
+          `Set apply=true to assign money in these ${affordable.length} month(s). This writes to historical ` +
             `months and lowers Ready to Assign in each one - review the residuals first.`
         );
       }
@@ -359,6 +385,78 @@ function forwardBalanceWalk(card: AccountBase, transactions: TransactionSummaryB
 
 function dedupeSorted(keys: string[]): string[] {
   return Array.from(new Set(keys)).sort();
+}
+
+interface Correction {
+  month: string;
+  categoryId: string;
+  budgeted: number;
+  previousBudgeted: number;
+  cardName: string;
+}
+
+interface BlockedCorrection {
+  correction: Correction;
+  worstMonth: string;
+  worstReadyToAssign: number;
+}
+
+/**
+ * Refuse corrections the budget cannot fund.
+ *
+ * Assigning more in month M lowers Ready to Assign in M *and in every month
+ * after it*, because the money is taken from the same pool that rolls forward.
+ * So a correction that looks affordable against its own month can still drive a
+ * later month negative, and several small corrections can do it together when
+ * none of them would alone.
+ *
+ * Corrections are screened oldest first, each against the cascade of the ones
+ * already accepted. A correction that lowers the assigned amount frees money and
+ * is never blocked.
+ */
+export function screenAffordability(
+  corrections: Correction[],
+  months: string[],
+  toBeBudgeted: Map<string, number>
+): { affordable: Correction[]; blocked: BlockedCorrection[] } {
+  const chronological = [...corrections].sort((a, b) => a.month.localeCompare(b.month));
+  const affordable: Correction[] = [];
+  const blocked: BlockedCorrection[] = [];
+
+  for (const candidate of chronological) {
+    // Lowering the assigned amount hands money back to Ready to Assign, so it
+    // can never make a month worse - not even one that is already negative.
+    if (candidate.budgeted <= candidate.previousBudgeted) {
+      affordable.push(candidate);
+      continue;
+    }
+
+    const deltaByMonth = new Map<string, number>();
+    for (const c of [...affordable, candidate]) {
+      deltaByMonth.set(c.month, (deltaByMonth.get(c.month) ?? 0) + (c.budgeted - c.previousBudgeted));
+    }
+
+    let cumulative = 0;
+    let worstMonth = "";
+    let worstReadyToAssign = Number.POSITIVE_INFINITY;
+    for (const month of months) {
+      cumulative += deltaByMonth.get(month) ?? 0;
+      if (month < candidate.month) continue;
+      const projected = (toBeBudgeted.get(month) ?? 0) - cumulative;
+      if (projected < worstReadyToAssign) {
+        worstReadyToAssign = projected;
+        worstMonth = month;
+      }
+    }
+
+    if (worstReadyToAssign < 0) {
+      blocked.push({ correction: candidate, worstMonth, worstReadyToAssign });
+    } else {
+      affordable.push(candidate);
+    }
+  }
+
+  return { affordable, blocked };
 }
 
 /**

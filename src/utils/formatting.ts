@@ -1,4 +1,5 @@
 import { apiUsageTracker } from "./api-usage.js";
+import { describeError } from "./errors.js";
 
 const RATE_LIMIT_WARN_THRESHOLD = 50;
 const RATE_LIMIT_CRITICAL_THRESHOLD = 20;
@@ -63,19 +64,10 @@ export function textResult(text: string) {
   return { content: [{ type: "text" as const, text: text + rateLimitFooter() }] };
 }
 
-function extractErrorMessage(e: unknown): string {
-  if (e && typeof e === "object") {
-    const obj = e as Record<string, any>;
-    if (obj.error?.detail) return obj.error.detail;
-    if (obj.message) return obj.message;
-  }
-  return JSON.stringify(e);
-}
-
 /** Build an error response for MCP tool results */
 export function errorResult(error: unknown) {
   return {
-    content: [{ type: "text" as const, text: `Error: ${extractErrorMessage(error)}${rateLimitFooter()}` }],
+    content: [{ type: "text" as const, text: `Error: ${describeError(error)}${rateLimitFooter()}` }],
     isError: true,
   };
 }

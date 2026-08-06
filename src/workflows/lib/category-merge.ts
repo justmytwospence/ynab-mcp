@@ -1,5 +1,6 @@
 import { getClient } from "../../ynab-client.js";
 import { formatCurrency } from "../../utils/formatting.js";
+import { describeError } from "../../utils/errors.js";
 import {
   getBudgetSnapshot,
   internalCategoryIds,
@@ -210,8 +211,8 @@ export async function performCategoryMerge(
         })),
       });
       transactionsMoved = transactions.length;
-    } catch (e: any) {
-      failures.push(`transactions: ${e.message}`);
+    } catch (e: unknown) {
+      failures.push(`transactions: ${describeError(e)}`);
     }
     apiCalls += 1;
   }
@@ -233,9 +234,9 @@ export async function performCategoryMerge(
       );
       apiCalls += 1;
       monthsAdjusted += 1;
-    } catch (e: any) {
+    } catch (e: unknown) {
       apiCalls += 1;
-      failures.push(`${m.month}: ${e.message}`);
+      failures.push(`${m.month}: ${describeError(e)}`);
     }
   }
 

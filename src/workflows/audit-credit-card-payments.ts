@@ -10,6 +10,7 @@ import {
   snapshotMonths,
   type BudgetSnapshot,
 } from "../budget-snapshot.js";
+import { describeError } from "../utils/errors.js";
 
 const CREDIT_ACCOUNT_TYPES = new Set(["creditCard", "lineOfCredit"]);
 
@@ -259,10 +260,10 @@ export function registerCreditCardAuditTools(server: McpServer) {
               category: { budgeted: c.budgeted },
             });
             applied.push(`${c.month} (${c.cardName}): assigned ${formatCurrency(c.budgeted)}`);
-          } catch (e: any) {
+          } catch (e: unknown) {
             // Keep going: a failure part way through must not hide which months
             // were already rewritten.
-            failed.push(`${c.month} (${c.cardName}): ${e.message}`);
+            failed.push(`${c.month} (${c.cardName}): ${describeError(e)}`);
           }
           apiCalls += 1;
         }

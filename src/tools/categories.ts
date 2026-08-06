@@ -1,31 +1,42 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getClient } from "../ynab-client.js";
-import { textResult, errorResult, formatCurrency, dollarsToMilliunits } from "../utils/formatting.js";
+import { textResult, errorResult, formatCurrency, dollarsToMilliunits, attributes } from "../utils/formatting.js";
 
 export function registerCategoryTools(server: McpServer) {
   server.registerTool("list_categories", {
     title: "List Categories",
-    description: "[1 API call] List all categories grouped by category group for a budget",
+    description:
+      "[1 API call] List all categories grouped by category group. Hidden categories are included by default " +
+      "and marked [hidden] - they still hold balances, and stranded money usually lives there. Internal groups " +
+      "(Credit Card Payments, Internal Master Category) are marked [internal]. Deleted entities are only ever " +
+      "returned by delta requests.",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
+      include_hidden: z.boolean().default(true).describe("Include hidden categories and groups (default: true)"),
+      include_internal: z.boolean().default(true).describe("Include internal category groups such as Credit Card Payments (default: true)"),
+      include_deleted: z.boolean().default(false).describe("Include deleted categories and groups (only present in delta requests)"),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
     },
     annotations: { readOnlyHint: true },
-  }, async ({ budget_id, last_knowledge_of_server }) => {
+  }, async ({ budget_id, include_hidden, include_internal, include_deleted, last_knowledge_of_server }) => {
     try {
       const response = await getClient().categories.getCategories(budget_id, last_knowledge_of_server);
       const groups = response.data.category_groups;
       const lines: string[] = [];
       for (const group of groups) {
-        lines.push(`\n## ${group.name} (ID: ${group.id})`);
+        if (group.hidden && !include_hidden) continue;
+        if (group.internal && !include_internal) continue;
+        if (group.deleted && !include_deleted) continue;
+        lines.push(`\n## ${group.name}${attributes(group)} (ID: ${group.id})`);
         if (group.categories) {
           for (const cat of group.categories) {
-            if (cat.hidden) continue;
+            if (cat.hidden && !include_hidden) continue;
+            if (cat.deleted && !include_deleted) continue;
             const budgeted = formatCurrency(cat.budgeted);
             const activity = formatCurrency(cat.activity);
             const balance = formatCurrency(cat.balance);
-            lines.push(`  - ${cat.name}: Budgeted ${budgeted} | Activity ${activity} | Balance ${balance} [ID: ${cat.id}]`);
+            lines.push(`  - ${cat.name}${attributes(cat)}: Budgeted ${budgeted} | Activity ${activity} | Balance ${balance} [ID: ${cat.id}]`);
           }
         }
       }
@@ -58,6 +69,7 @@ export function registerCategoryTools(server: McpServer) {
         `Goal Target Month: ${c.goal_target_month ?? "None"}`,
         `Note: ${c.note ?? "None"}`,
         `Hidden: ${c.hidden}`,
+        `Deleted: ${c.deleted}`,
         `ID: ${c.id}`,
       ];
       return textResult(lines.join("\n"));

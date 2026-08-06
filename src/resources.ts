@@ -1,6 +1,6 @@
 import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getClient } from "./ynab-client.js";
-import { formatCurrency } from "./utils/formatting.js";
+import { formatCurrency, attributes } from "./utils/formatting.js";
 import { apiUsageTracker } from "./utils/api-usage.js";
 
 export function registerResources(server: McpServer) {
@@ -55,8 +55,7 @@ export function registerResources(server: McpServer) {
 
       lines.push("", "Category Groups:");
       for (const group of budget.category_groups ?? []) {
-        if (group.hidden) continue;
-        lines.push(`  ${group.name}`);
+        lines.push(`  ${group.name}${attributes(group)}`);
       }
 
       return { contents: [{ uri: uri.href, mimeType: "text/plain", text: lines.join("\n") }] };
@@ -114,7 +113,6 @@ export function registerResources(server: McpServer) {
       // Group categories by category_group_name
       const grouped = new Map<string, typeof monthData.categories>();
       for (const cat of monthData.categories ?? []) {
-        if (cat.hidden) continue;
         const groupName = cat.category_group_name ?? "Ungrouped";
         if (!grouped.has(groupName)) grouped.set(groupName, []);
         grouped.get(groupName)!.push(cat);
@@ -124,7 +122,7 @@ export function registerResources(server: McpServer) {
         lines.push(`${groupName}:`);
         for (const c of cats) {
           lines.push(
-            `  ${c.name}: Budgeted ${formatCurrency(c.budgeted)} | Activity ${formatCurrency(c.activity)} | Balance ${formatCurrency(c.balance)}`
+            `  ${c.name}${attributes(c)}: Budgeted ${formatCurrency(c.budgeted)} | Activity ${formatCurrency(c.activity)} | Balance ${formatCurrency(c.balance)}`
           );
         }
         lines.push("");

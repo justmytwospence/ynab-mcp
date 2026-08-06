@@ -22,6 +22,19 @@ export function formatCurrency(milliunits: number): string {
   });
 }
 
+/**
+ * Render the hidden/internal/deleted state of a category or category group as
+ * a display suffix, e.g. " [hidden]". Empty when the entity is ordinary.
+ */
+export function attributes(entity: { hidden?: boolean; internal?: boolean; deleted?: boolean }): string {
+  const flags = [
+    entity.internal ? "internal" : null,
+    entity.hidden ? "hidden" : null,
+    entity.deleted ? "deleted" : null,
+  ].filter(Boolean);
+  return flags.length > 0 ? ` [${flags.join(", ")}]` : "";
+}
+
 /** Format a date string for display */
 export function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return "N/A";

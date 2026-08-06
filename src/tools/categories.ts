@@ -88,18 +88,21 @@ export function registerCategoryTools(server: McpServer) {
       note: z.string().optional().describe("Category note"),
       goal_target: z.number().optional().describe("Goal target amount in dollars"),
       goal_target_date: z.string().optional().describe("Goal target date (YYYY-MM-DD)"),
+      goal_frequency: z.enum(["monthly", "weekly", "yearly"]).optional().describe("Configure a recurring NEED target repeating at this frequency. REPLACES any existing target on the category. Requires goal_target, cannot be combined with goal_target_date, and is not supported for Credit Card Payment categories."),
     },
     annotations: { readOnlyHint: false },
-  }, async ({ budget_id, name, category_group_id, note, goal_target, goal_target_date }) => {
+  }, async ({ budget_id, name, category_group_id, note, goal_target, goal_target_date, goal_frequency }) => {
     try {
+      const invalid = validateGoalFrequency(goal_frequency, goal_target, goal_target_date);
+      if (invalid) return errorResult(invalid);
       const response = await getClient().categories.createCategory(budget_id, {
-        category: {
+        category: withGoalFrequency({
           name,
           category_group_id,
           note,
           goal_target: goal_target != null ? dollarsToMilliunits(goal_target) : undefined,
           goal_target_date,
-        },
+        }, goal_frequency),
       });
       const c = response.data.category;
       return textResult(`Created category "${c.name}"\nID: ${c.id}`);
@@ -114,8 +117,10 @@ export function registerCategoryTools(server: McpServer) {
       "[1 API call] Update an existing category. This is the full writable surface: name, note, " +
       "category_group_id (moves the category to another group), goal_target, goal_target_date, and " +
       "goal_needs_whole_amount. Setting goal_target on a category with no goal creates a monthly goal " +
-      "('NEED', or 'MF' for Credit Card Payment categories). A goal's type, cadence, and day are read-only " +
-      "and cannot be changed once the goal exists. There is no way to hide or delete a category via the API.",
+      "('NEED', or 'MF' for Credit Card Payment categories). goal_frequency sets a recurring NEED target's cadence " +
+      "to monthly, weekly, or yearly, REPLACING any existing target. Other cadences (every N months, every 2 years) " +
+      "and a specific goal_day cannot be set through the API, and goal_type cannot be changed once a goal exists. " +
+      "There is no way to hide or delete a category via the API.",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       category_id: z.string().describe("The category ID to update"),
@@ -125,19 +130,22 @@ export function registerCategoryTools(server: McpServer) {
       goal_target: z.number().optional().describe("New goal target in dollars"),
       goal_target_date: z.string().optional().describe("New goal target date (YYYY-MM-DD)"),
       goal_needs_whole_amount: z.boolean().optional().describe("NEED goals only: true = 'Set aside another...', false = 'Refill up to...'"),
+      goal_frequency: z.enum(["monthly", "weekly", "yearly"]).optional().describe("Configure a recurring NEED target repeating at this frequency. REPLACES any existing target on the category. Requires goal_target, cannot be combined with goal_target_date, and is not supported for Credit Card Payment categories."),
     },
-    annotations: { readOnlyHint: false },
-  }, async ({ budget_id, category_id, name, note, category_group_id, goal_target, goal_target_date, goal_needs_whole_amount }) => {
+    annotations: { readOnlyHint: false, destructiveHint: true },
+  }, async ({ budget_id, category_id, name, note, category_group_id, goal_target, goal_target_date, goal_needs_whole_amount, goal_frequency }) => {
     try {
+      const invalid = validateGoalFrequency(goal_frequency, goal_target, goal_target_date);
+      if (invalid) return errorResult(invalid);
       const response = await getClient().categories.updateCategory(budget_id, category_id, {
-        category: {
+        category: withGoalFrequency({
           name,
           note,
           category_group_id,
           goal_target: goal_target != null ? dollarsToMilliunits(goal_target) : undefined,
           goal_target_date,
           goal_needs_whole_amount,
-        },
+        }, goal_frequency),
       });
       const c = response.data.category;
       return textResult(
@@ -237,4 +245,26 @@ export function registerCategoryTools(server: McpServer) {
       return errorResult(e);
     }
   });
+}
+
+/**
+ * goal_frequency was added to the category create/update bodies in server
+ * v1.86.0 but is absent from the SDK 4.5.0 models, so it has to be attached
+ * past the type. The SDK is a version behind the API here, not the other way
+ * around: the live OpenAPI spec is the authority.
+ */
+function withGoalFrequency<T extends object>(category: T, goalFrequency: string | undefined): T {
+  return goalFrequency ? ({ ...category, goal_frequency: goalFrequency } as T) : category;
+}
+
+/** The spec's stated constraints on goal_frequency, checked before the write. */
+function validateGoalFrequency(
+  goalFrequency: string | undefined,
+  goalTarget: number | undefined,
+  goalTargetDate: string | undefined
+): string | null {
+  if (!goalFrequency) return null;
+  if (goalTarget == null) return "goal_frequency requires goal_target.";
+  if (goalTargetDate != null) return "goal_frequency cannot be combined with goal_target_date.";
+  return null;
 }

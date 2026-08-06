@@ -32,10 +32,12 @@ function formatTransaction(t: TransactionDetail | HybridTransaction): string {
 export function registerTransactionTools(server: McpServer) {
   server.registerTool("list_transactions", {
     title: "List Transactions",
-    description: "[1 API call] List transactions for a budget with optional filters. Returns most recent transactions first.",
+    description:
+      "[1 API call] List transactions for a budget with optional filters. Returns most recent transactions first. " +
+      "IMPORTANT: when since_date is omitted the server returns only the LAST TWELVE MONTHS, not all history, and says nothing about the truncation. Pass since_date explicitly for historical work, or use get_budget, whose full export has no date window.",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
-      since_date: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD)"),
+      since_date: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD). Omitting this defaults to one year ago, silently truncating history."),
       until_date: z.string().optional().describe("Only return transactions on or before this date (YYYY-MM-DD)"),
       type: z.enum(TRANSACTION_TYPES).optional().describe("Filter by 'uncategorized' or 'unapproved'"),
       cleared: z.enum(CLEARED_FILTER_VALUES).optional().describe(CLEARED_FILTER_DESC),
@@ -321,11 +323,12 @@ export function registerTransactionTools(server: McpServer) {
     title: "List Account Transactions",
     description:
       "[1 API call] List transactions for a specific account. " +
+      "IMPORTANT: when since_date is omitted the server returns only the LAST TWELVE MONTHS, not all history, and says nothing about the truncation. Pass since_date explicitly for historical work, or use get_budget, whose full export has no date window. " +
       "Pass cleared='unreconciled' to get exactly the transactions still pending the next reconciliation.",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       account_id: z.string().describe("The account ID"),
-      since_date: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD)"),
+      since_date: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD). Omitting this defaults to one year ago, silently truncating history."),
       until_date: z.string().optional().describe("Only return transactions on or before this date (YYYY-MM-DD)"),
       type: z.enum(TRANSACTION_TYPES).optional().describe("Filter by type"),
       cleared: z.enum(CLEARED_FILTER_VALUES).optional().describe(CLEARED_FILTER_DESC),
@@ -355,11 +358,11 @@ export function registerTransactionTools(server: McpServer) {
 
   server.registerTool("list_category_transactions", {
     title: "List Category Transactions",
-    description: "[1 API call] List transactions for a specific category",
+    description: "[1 API call] List transactions for a specific category. " + "IMPORTANT: when since_date is omitted the server returns only the LAST TWELVE MONTHS, not all history, and says nothing about the truncation. Pass since_date explicitly for historical work, or use get_budget, whose full export has no date window.",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       category_id: z.string().describe("The category ID"),
-      since_date: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD)"),
+      since_date: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD). Omitting this defaults to one year ago, silently truncating history."),
       until_date: z.string().optional().describe("Only return transactions on or before this date (YYYY-MM-DD)"),
       type: z.enum(TRANSACTION_TYPES).optional().describe("Filter by type"),
       cleared: z.enum(CLEARED_FILTER_VALUES).optional().describe(CLEARED_FILTER_DESC),
@@ -389,11 +392,11 @@ export function registerTransactionTools(server: McpServer) {
 
   server.registerTool("list_payee_transactions", {
     title: "List Payee Transactions",
-    description: "[1 API call] List transactions for a specific payee",
+    description: "[1 API call] List transactions for a specific payee. " + "IMPORTANT: when since_date is omitted the server returns only the LAST TWELVE MONTHS, not all history, and says nothing about the truncation. Pass since_date explicitly for historical work, or use get_budget, whose full export has no date window.",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       payee_id: z.string().describe("The payee ID"),
-      since_date: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD)"),
+      since_date: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD). Omitting this defaults to one year ago, silently truncating history."),
       until_date: z.string().optional().describe("Only return transactions on or before this date (YYYY-MM-DD)"),
       type: z.enum(TRANSACTION_TYPES).optional().describe("Filter by type"),
       cleared: z.enum(CLEARED_FILTER_VALUES).optional().describe(CLEARED_FILTER_DESC),
@@ -427,7 +430,7 @@ export function registerTransactionTools(server: McpServer) {
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       month: z.string().describe("Month in YYYY-MM-DD format (first of month)"),
-      since_date: z.string().optional().describe("Only return transactions on or after this date"),
+      since_date: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD). Month-scoped, so no one-year default applies."),
       until_date: z.string().optional().describe("Only return transactions on or before this date (YYYY-MM-DD)"),
       type: z.enum(TRANSACTION_TYPES).optional().describe("Filter by type"),
       cleared: z.enum(CLEARED_FILTER_VALUES).optional().describe(CLEARED_FILTER_DESC),

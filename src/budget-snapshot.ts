@@ -1,6 +1,7 @@
 import type { AccountBase, CategoryBase, PlanDetail, TransactionSummaryBase } from "ynab";
 import { getClient } from "./ynab-client.js";
 import { errorStatus } from "./utils/errors.js";
+import { setActiveCurrencyFormat } from "./utils/formatting.js";
 
 /**
  * A cached full budget export.
@@ -278,6 +279,9 @@ function yearWindows(firstMonth: string): Array<[string, string]> {
 }
 
 function store(requestedId: string, snapshot: BudgetSnapshot) {
+  // The export carries the budget's currency format, and the *Base models it
+  // returns have no server-formatted amounts, so formatting depends on this.
+  setActiveCurrencyFormat(snapshot.plan.currency_format);
   cache.set(requestedId, snapshot);
   cache.set(snapshot.budgetId, snapshot);
 }

@@ -1,7 +1,7 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
 import { getClient } from "../ynab-client.js";
-import { textResult, errorResult, formatCurrency } from "../utils/formatting.js";
+import { textResult, errorResult, formatCurrency, setActiveCurrencyFormat } from "../utils/formatting.js";
 import { getBudgetSnapshot, snapshotMonths } from "../budget-snapshot.js";
 
 export function registerBudgetTools(server: McpServer) {
@@ -87,6 +87,7 @@ export function registerBudgetTools(server: McpServer) {
     try {
       const response = await getClient().plans.getPlanSettingsById(budget_id);
       const s = response.data.settings;
+      setActiveCurrencyFormat(s.currency_format);
       const lines = [
         `Date Format: ${s.date_format?.format}`,
         `Currency Format:`,
@@ -95,6 +96,8 @@ export function registerBudgetTools(server: McpServer) {
         `  Decimal Digits: ${s.currency_format?.decimal_digits}`,
         `  Symbol First: ${s.currency_format?.symbol_first}`,
         `  Display Symbol: ${s.currency_format?.display_symbol}`,
+        ``,
+        `Amounts in this session will now be formatted using this currency: ${formatCurrency(1234560)}`,
       ];
       return textResult(lines.join("\n"));
     } catch (e: any) {

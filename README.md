@@ -83,7 +83,7 @@ Each tool's description includes its API call cost in brackets (e.g. `[1 API cal
 | Tool | Description |
 |------|-------------|
 | `list_budgets` | List all budgets with optional account info |
-| `get_budget` | Get a budget's full detail including all entities |
+| `get_budget` | Get a budget's full detail including every month's per-category amounts; cached in memory and refreshed by delta |
 | `get_budget_settings` | Get date and currency format settings |
 
 ### Accounts
@@ -170,9 +170,9 @@ Each tool's description includes its API call cost in brackets (e.g. `[1 API cal
 
 | Tool | Description |
 |------|-------------|
-| `merge_category` | Merge a source category into a target, moving all transactions and budgeted amounts |
-| `delete_category` | Clean up a category for deletion: re-categorizes all history to a replacement and zeros budgets (final delete is manual in the YNAB app — API limitation) |
-| `audit_credit_card_payments` | Audit CC payment category balances against card balances, with optional auto-fix |
+| `merge_category` | Merge a source category into a target, moving all transactions and budgeted amounts (1 API call to preview) |
+| `delete_category` | Clean up a category for deletion: re-categorizes all history to a replacement and zeros budgets, final delete is manual in the YNAB app — API limitation (1 API call to preview) |
+| `audit_credit_card_payments` | Audit credit card and line-of-credit funding gaps for unexplained month-over-month drift, with optional auto-fix (1 API call) |
 | `audit_account_reconciliation` | Diagnose an account's reconciliation state (cleared vs. bank balance, unreconciled txn list) with optional close-out |
 
 ## Resources

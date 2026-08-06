@@ -34,6 +34,16 @@ export async function performCategoryMerge(
 ): Promise<MergeResult> {
   let apiCalls = 0;
 
+  // Reject a self-merge before spending any calls. Merging a category into
+  // itself would double its budgeted amount and then immediately zero it,
+  // wiping every month with a non-zero budget.
+  if (sourceCategoryId === targetCategoryId) {
+    throw new Error(
+      "source and target are the same category. Merging a category into " +
+        "itself would zero out its budget in every month."
+    );
+  }
+
   const [sourceRes, targetRes] = await Promise.all([
     getClient().categories.getCategoryById(budgetId, sourceCategoryId),
     getClient().categories.getCategoryById(budgetId, targetCategoryId),
@@ -42,6 +52,15 @@ export async function performCategoryMerge(
 
   const sourceCat = sourceRes.data.category;
   const targetCat = targetRes.data.category;
+
+  // A deleted category cannot receive transactions or budget amounts; the API
+  // rejects the write partway through the sequential loop.
+  if (targetCat.deleted) {
+    throw new Error(`Target category "${targetCat.name}" is deleted and cannot receive a merge.`);
+  }
+  if (sourceCat.deleted) {
+    throw new Error(`Source category "${sourceCat.name}" is deleted; there is nothing to merge.`);
+  }
 
   const cutoff = fiveYearCutoff();
 

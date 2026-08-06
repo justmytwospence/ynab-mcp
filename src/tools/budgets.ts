@@ -64,6 +64,12 @@ export function registerBudgetTools(server: McpServer) {
         `Server Knowledge: ${snapshot.serverKnowledge}`,
         `API calls used: ${apiCalls}`,
       ];
+      if (snapshot.assembledPiecewise) {
+        summary.push(
+          `Note: the full export timed out (503), so this was assembled from the per-resource endpoints.`,
+          `It has no plan-level server knowledge, so each refresh re-assembles it.`
+        );
+      }
       return textResult(summary.join("\n"));
     } catch (e: any) {
       return errorResult(e);

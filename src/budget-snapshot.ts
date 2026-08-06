@@ -1,5 +1,6 @@
-import type { PlanDetail } from "ynab";
+import type { AccountBase, CategoryBase, PlanDetail, TransactionSummaryBase } from "ynab";
 import { getClient } from "./ynab-client.js";
+import { errorStatus } from "./utils/errors.js";
 
 /**
  * A cached full budget export.
@@ -14,8 +15,16 @@ export interface BudgetSnapshot {
   /** The budget's real id (never the "last-used" alias). */
   budgetId: string;
   plan: PlanDetail;
+  /**
+   * The knowledge value GET /plans/{id} returned, and only that endpoint's.
+   * The counter is per-plan and monotonic, but the value an endpoint returns
+   * reflects only the entity types that endpoint covers, so this must never be
+   * passed to getAccounts, getCategories, or any other delta-capable call.
+   */
   serverKnowledge: number;
   fetchedAt: number;
+  /** True when the export was assembled per-resource after a full export timed out. */
+  assembledPiecewise: boolean;
 }
 
 export interface SnapshotResult {
@@ -37,6 +46,11 @@ interface Identified {
 /**
  * Apply a delta list onto a cached list: changed entities replace their
  * previous version, new entities are appended, and tombstones are removed.
+ */
+/**
+ * A full response omits deleted entities entirely; a delta response includes
+ * them with deleted: true. Honoring the tombstone is what keeps a long-lived
+ * cached snapshot from accumulating entities the user has since deleted.
  */
 function mergeById<T extends Identified>(existing: T[] | undefined, incoming: T[] | undefined): T[] {
   const merged = new Map<string, T>((existing ?? []).map((e) => [e.id, e]));
@@ -137,6 +151,7 @@ export async function getBudgetSnapshot(
         plan: mergePlan(cached.plan, response.data.plan),
         serverKnowledge: response.data.server_knowledge ?? cached.serverKnowledge,
         fetchedAt: Date.now(),
+        assembledPiecewise: cached.assembledPiecewise,
       };
       store(budgetId, snapshot);
       return { snapshot, apiCalls, refetchedInFull };
@@ -144,16 +159,122 @@ export async function getBudgetSnapshot(
     refetchedInFull = true;
   }
 
-  const response = await getClient().plans.getPlanById(budgetId);
-  apiCalls += 1;
-  const snapshot: BudgetSnapshot = {
-    budgetId: response.data.plan.id,
-    plan: response.data.plan,
-    serverKnowledge: response.data.server_knowledge ?? 0,
-    fetchedAt: Date.now(),
+  try {
+    const response = await getClient().plans.getPlanById(budgetId);
+    apiCalls += 1;
+    const snapshot: BudgetSnapshot = {
+      budgetId: response.data.plan.id,
+      plan: response.data.plan,
+      serverKnowledge: response.data.server_knowledge ?? 0,
+      fetchedAt: Date.now(),
+      assembledPiecewise: false,
+    };
+    store(budgetId, snapshot);
+    return { snapshot, apiCalls, refetchedInFull };
+  } catch (e: unknown) {
+    apiCalls += 1;
+    if (errorStatus(e) !== 503) throw e;
+    // The API has no pagination and gives up after 30 seconds of server
+    // processing, so a large, long-lived budget can never complete a full
+    // export. Retrying the same request would fail the same way; assemble the
+    // same shape from the per-resource endpoints instead.
+    const assembled = await assemblePiecewise(budgetId);
+    store(budgetId, assembled.snapshot);
+    return {
+      snapshot: assembled.snapshot,
+      apiCalls: apiCalls + assembled.apiCalls,
+      refetchedInFull,
+    };
+  }
+}
+
+/**
+ * Rebuild the full export from the per-resource endpoints after a 503.
+ *
+ * Costs 4 + M + Y calls (M = budget months, Y = years of transaction history),
+ * against a 200/hour budget, so it is a fallback and never the default path.
+ * Transactions are walked a year at a time because since_date alone defaults to
+ * one year ago; until_date bounds each window.
+ */
+async function assemblePiecewise(budgetId: string): Promise<{ snapshot: BudgetSnapshot; apiCalls: number }> {
+  const client = getClient();
+  let apiCalls = 0;
+
+  const [settings, accountsRes, categoriesRes, monthsRes] = await Promise.all([
+    client.plans.getPlanSettingsById(budgetId),
+    client.accounts.getAccounts(budgetId),
+    client.categories.getCategories(budgetId),
+    client.months.getPlanMonths(budgetId),
+  ]);
+  apiCalls += 4;
+
+  const monthSummaries = monthsRes.data.months.filter((m) => !m.deleted);
+  const monthDetails = [];
+  for (const summary of monthSummaries) {
+    monthDetails.push((await client.months.getPlanMonth(budgetId, summary.month)).data.month);
+    apiCalls += 1;
+  }
+
+  const firstMonth = monthSummaries[0]?.month ?? `${new Date().getFullYear()}-01-01`;
+  const transactions: TransactionSummaryBase[] = [];
+  const subtransactions: PlanDetail["subtransactions"] = [];
+  for (const [since, until] of yearWindows(firstMonth)) {
+    const res = await client.transactions.getTransactionsRaw({
+      planId: budgetId,
+      sinceDate: since,
+      untilDate: until,
+    }).then((r) => r.value());
+    apiCalls += 1;
+    for (const t of res.data.transactions) {
+      transactions.push(t);
+      for (const leg of t.subtransactions ?? []) subtransactions.push(leg);
+    }
+  }
+
+  const categories: CategoryBase[] = categoriesRes.data.category_groups.flatMap((g) => g.categories);
+  const accounts: AccountBase[] = accountsRes.data.accounts;
+
+  const plan: PlanDetail = {
+    id: budgetId,
+    name: budgetId,
+    currency_format: settings.data.settings.currency_format,
+    date_format: settings.data.settings.date_format,
+    first_month: monthSummaries[0]?.month,
+    last_month: monthSummaries[monthSummaries.length - 1]?.month,
+    accounts,
+    category_groups: categoriesRes.data.category_groups,
+    categories,
+    months: monthDetails,
+    transactions,
+    subtransactions,
   };
-  store(budgetId, snapshot);
-  return { snapshot, apiCalls, refetchedInFull };
+
+  return {
+    snapshot: {
+      budgetId,
+      plan,
+      // Assembled from other endpoints, so there is no plan-level knowledge
+      // value to delta against; the next refresh fetches in full.
+      serverKnowledge: 0,
+      fetchedAt: Date.now(),
+      assembledPiecewise: true,
+    },
+    apiCalls,
+  };
+}
+
+/** [since, until] date pairs covering firstMonth through today, a year at a time. */
+function yearWindows(firstMonth: string): Array<[string, string]> {
+  const windows: Array<[string, string]> = [];
+  const today = new Date().toISOString().substring(0, 10);
+  let since = firstMonth;
+  while (since < today) {
+    const untilYear = Number.parseInt(since.substring(0, 4), 10) + 1;
+    const until = `${untilYear}${since.substring(4)}`;
+    windows.push([since, until > today ? today : until]);
+    since = until;
+  }
+  return windows.length > 0 ? windows : [[firstMonth, today]];
 }
 
 function store(requestedId: string, snapshot: BudgetSnapshot) {

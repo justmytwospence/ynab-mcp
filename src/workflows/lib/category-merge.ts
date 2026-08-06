@@ -1,6 +1,11 @@
 import { getClient } from "../../ynab-client.js";
 import { formatCurrency } from "../../utils/formatting.js";
-import { getBudgetSnapshot, invalidateBudgetSnapshot, snapshotMonths } from "../../budget-snapshot.js";
+import {
+  getBudgetSnapshot,
+  internalCategoryIds,
+  invalidateBudgetSnapshot,
+  snapshotMonths,
+} from "../../budget-snapshot.js";
 
 export interface MergeResult {
   output: string;
@@ -73,22 +78,20 @@ export async function performCategoryMerge(
   if (sourceCat.deleted) throw new Error(`Source category "${sourceCat.name}" is deleted; there is nothing to merge.`);
   if (targetCat.deleted) throw new Error(`Target category "${targetCat.name}" is deleted and cannot receive a merge.`);
 
-  // Internal groups hold Credit Card Payment categories and Inflow: Ready to
-  // Assign. The API rejects writes to them, and it would do so partway through
-  // the sequential loop, after some months had been rewritten.
-  const internalGroupIds = new Set(
-    (plan.category_groups ?? []).filter((g) => g.internal).map((g) => g.id)
-  );
-  if (internalGroupIds.has(targetCat.category_group_id)) {
+  // Internal categories are Credit Card Payment categories and Inflow: Ready
+  // to Assign. Assigning a transaction to one is not an error - the API ignores
+  // it silently - so the merge has to refuse up front.
+  const internalIds = internalCategoryIds(snapshot);
+  if (internalIds.has(targetCat.id)) {
     throw new Error(
-      `Target category "${targetCat.name}" belongs to an internal category group ` +
-        `(Credit Card Payments or Inflow: Ready to Assign). The API does not permit assigning ` +
-        `transactions to it.`
+      `Target category "${targetCat.name}" is an internal category (a Credit Card Payment category ` +
+        `or Inflow: Ready to Assign). The API does not reject transactions assigned to a Credit Card ` +
+        `Payment category - it silently ignores them - so this merge would report success and move nothing.`
     );
   }
-  if (internalGroupIds.has(sourceCat.category_group_id)) {
+  if (internalIds.has(sourceCat.id)) {
     throw new Error(
-      `Source category "${sourceCat.name}" belongs to an internal category group and cannot be merged.`
+      `Source category "${sourceCat.name}" is an internal category and cannot be merged.`
     );
   }
 

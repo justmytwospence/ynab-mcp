@@ -172,6 +172,37 @@ export function invalidateBudgetSnapshot(budgetId?: string) {
   if (snapshot) cache.delete(snapshot.budgetId);
 }
 
+/** Group names YNAB uses for system-managed categories, used only as a last resort. */
+const INTERNAL_GROUP_NAMES = new Set(["Credit Card Payments", "Internal Master Category"]);
+
+/**
+ * Ids of the categories YNAB manages itself: Credit Card Payment categories and
+ * Inflow: Ready to Assign.
+ *
+ * `internal` on the category is the supported, localization-proof signal, and
+ * the category group carries the same flag. Whether YNAB flags the Credit Card
+ * Payments group internal is undocumented, so fall back to the English group
+ * names rather than depending on it - a budget in another language loses only
+ * the fallback, not the primary signal.
+ *
+ * These must be excluded from spending analysis, or Inflow: Ready to Assign
+ * appears as the largest expense in the budget, and they are rejected as a
+ * category_group_id target on create and update.
+ */
+export function internalCategoryIds(snapshot: BudgetSnapshot): Set<string> {
+  const plan = snapshot.plan;
+  const internalGroupIds = new Set(
+    (plan.category_groups ?? [])
+      .filter((g) => g.internal || INTERNAL_GROUP_NAMES.has(g.name))
+      .map((g) => g.id)
+  );
+  const ids = new Set<string>();
+  for (const category of plan.categories ?? []) {
+    if (category.internal || internalGroupIds.has(category.category_group_id)) ids.add(category.id);
+  }
+  return ids;
+}
+
 /** Months present in the snapshot, chronologically, excluding deleted ones. */
 export function snapshotMonths(snapshot: BudgetSnapshot): MonthEntry[] {
   return (snapshot.plan.months ?? [])

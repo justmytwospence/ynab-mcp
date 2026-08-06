@@ -5,6 +5,7 @@ import { getClient } from "../ynab-client.js";
 import { textResult, errorResult, formatCurrency, dollarsToMilliunits } from "../utils/formatting.js";
 import {
   getBudgetSnapshot,
+  internalCategoryIds,
   invalidateBudgetSnapshot,
   snapshotMonths,
   type BudgetSnapshot,
@@ -438,23 +439,16 @@ function spendByCardCategoryMonth(snapshot: BudgetSnapshot) {
  * The API exposes no account-to-payment-category key, but a payment transfer
  * into the card carries the payment category id, which is a real link rather
  * than a name guess. Fall back to matching the account name against the
- * categories in the internal category groups - identified by `internal`, not by
- * the localized group name "Credit Card Payments".
+ * categories flagged internal.
  */
 function paymentCategoryIdsByCard(snapshot: BudgetSnapshot): Map<string, string> {
   const plan = snapshot.plan;
-  const internalCategoryIds = new Set<string>();
-  for (const group of plan.category_groups ?? []) {
-    if (!group.internal) continue;
-    for (const category of plan.categories ?? []) {
-      if (category.category_group_id === group.id) internalCategoryIds.add(category.id);
-    }
-  }
+  const internalIds = internalCategoryIds(snapshot);
 
   const result = new Map<string, string>();
   for (const t of plan.transactions ?? []) {
     if (t.deleted || !t.transfer_account_id || !t.category_id) continue;
-    if (!internalCategoryIds.has(t.category_id)) continue;
+    if (!internalIds.has(t.category_id)) continue;
     if (!result.has(t.transfer_account_id)) result.set(t.transfer_account_id, t.category_id);
   }
 
@@ -464,7 +458,7 @@ function paymentCategoryIdsByCard(snapshot: BudgetSnapshot): Map<string, string>
   for (const card of cards) {
     if (result.has(card.id)) continue;
     const named = (plan.categories ?? []).find(
-      (c) => internalCategoryIds.has(c.id) && !c.deleted && c.name === card.name
+      (c) => internalIds.has(c.id) && !c.deleted && c.name === card.name
     );
     if (named) result.set(card.id, named.id);
   }

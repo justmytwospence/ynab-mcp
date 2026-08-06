@@ -1,6 +1,6 @@
 import type { AccountBase, CategoryBase, PlanDetail, TransactionSummaryBase } from "ynab";
 import { getClient } from "./ynab-client.js";
-import { errorStatus } from "./utils/errors.js";
+import { errorStatus, isYnabApiError } from "./utils/errors.js";
 import { setActiveCurrencyFormat } from "./utils/formatting.js";
 
 /**
@@ -143,10 +143,26 @@ export async function getBudgetSnapshot(
   let apiCalls = 0;
   let refetchedInFull = false;
 
-  if (cached) {
-    const response = await getClient().plans.getPlanById(budgetId, cached.serverKnowledge);
+  // A piecewise snapshot has no plan-level knowledge value to delta against,
+  // and asking for one reissues the very request that timed out.
+  if (cached && !cached.assembledPiecewise) {
+    // A delta is small, but the endpoint is the same one that can time out on
+    // a large budget, so a 503 here falls through to the fallback below rather
+    // than escaping to the caller.
+    const response = await getClient()
+      .plans.getPlanById(budgetId, cached.serverKnowledge)
+      .catch((e: unknown) => {
+        if (errorStatus(e) === 503) return null;
+        // MonthDetailBase.categories is required in the SDK model, so a delta
+        // that reports a changed month without category detail throws inside
+        // the deserializer before deltaIsMergeable can inspect it. A delta that
+        // cannot be parsed is a delta that cannot be merged: fall through to a
+        // full refetch. Genuine API errors (401, 403, 429) still propagate.
+        if (!isYnabApiError(e)) return null;
+        throw e;
+      });
     apiCalls += 1;
-    if (deltaIsMergeable(response.data.plan)) {
+    if (response && deltaIsMergeable(response.data.plan)) {
       const snapshot: BudgetSnapshot = {
         budgetId: response.data.plan.id,
         plan: mergePlan(cached.plan, response.data.plan),
@@ -192,7 +208,7 @@ export async function getBudgetSnapshot(
 /**
  * Rebuild the full export from the per-resource endpoints after a 503.
  *
- * Costs 4 + M + Y calls (M = budget months, Y = years of transaction history),
+ * Costs 5 + M + Y calls (M = budget months, Y = years of transaction history),
  * against a 200/hour budget, so it is a fallback and never the default path.
  * Transactions are walked a year at a time because since_date alone defaults to
  * one year ago; until_date bounds each window.
@@ -201,13 +217,17 @@ async function assemblePiecewise(budgetId: string): Promise<{ snapshot: BudgetSn
   const client = getClient();
   let apiCalls = 0;
 
-  const [settings, accountsRes, categoriesRes, monthsRes] = await Promise.all([
+  const [settings, accountsRes, categoriesRes, monthsRes, payeesRes] = await Promise.all([
     client.plans.getPlanSettingsById(budgetId),
     client.accounts.getAccounts(budgetId),
     client.categories.getCategories(budgetId),
     client.months.getPlanMonths(budgetId),
+    // Payees are not decoration here: the audit identifies pre-YNAB debt by the
+    // "Starting Balance" payee, and without them it silently stops attributing
+    // starting-balance debt and reports it as unexplained drift.
+    client.payees.getPayees(budgetId),
   ]);
-  apiCalls += 4;
+  apiCalls += 5;
 
   const monthSummaries = monthsRes.data.months.filter((m) => !m.deleted);
   const monthDetails = [];
@@ -219,6 +239,7 @@ async function assemblePiecewise(budgetId: string): Promise<{ snapshot: BudgetSn
   const firstMonth = monthSummaries[0]?.month ?? `${new Date().getFullYear()}-01-01`;
   const transactions: TransactionSummaryBase[] = [];
   const subtransactions: PlanDetail["subtransactions"] = [];
+  const seen = new Set<string>();
   for (const [since, until] of yearWindows(firstMonth)) {
     const res = await client.transactions.getTransactionsRaw({
       planId: budgetId,
@@ -227,6 +248,10 @@ async function assemblePiecewise(budgetId: string): Promise<{ snapshot: BudgetSn
     }).then((r) => r.value());
     apiCalls += 1;
     for (const t of res.data.transactions) {
+      // since_date and until_date are both inclusive, so consecutive windows
+      // share their boundary date and return the same transaction twice.
+      if (seen.has(t.id)) continue;
+      seen.add(t.id);
       transactions.push(t);
       for (const leg of t.subtransactions ?? []) subtransactions.push(leg);
     }
@@ -237,12 +262,14 @@ async function assemblePiecewise(budgetId: string): Promise<{ snapshot: BudgetSn
 
   const plan: PlanDetail = {
     id: budgetId,
-    name: budgetId,
+    // The plan's own id and name live only on the endpoint that timed out.
+    name: `${budgetId} (assembled after a full-export timeout)`,
     currency_format: settings.data.settings.currency_format,
     date_format: settings.data.settings.date_format,
     first_month: monthSummaries[0]?.month,
     last_month: monthSummaries[monthSummaries.length - 1]?.month,
     accounts,
+    payees: payeesRes.data.payees,
     category_groups: categoriesRes.data.category_groups,
     categories,
     months: monthDetails,

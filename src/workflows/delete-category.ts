@@ -11,9 +11,11 @@ export function registerDeleteCategoryTool(server: McpServer) {
       "re-categorizes every historical transaction to a replacement category and zeros out all historical budgeted amounts. " +
       "The YNAB API does not expose category deletion, so the final delete must be performed in the YNAB app " +
       "(Manage Categories -> trash icon). After this workflow runs, the source category is safe to delete with no data loss. " +
-      "Dry run costs 4 + N calls (N = number of budget months — can be 50+ for older budgets, easily eating most of the 200/hour quota). " +
-      "Execution costs additional 1 + 2*M calls (M = months with non-zero budgets). " +
-      "Check get_api_usage before invoking on long-lived budgets. Defaults to dry_run=true.",
+      "The preview reads the whole budget in a single cached request, so it costs 1 call regardless of how many " +
+      "months the budget spans. Execution costs 1 call for the bulk transaction update plus 2 calls per month " +
+      "with a non-zero budget. " +
+      "Split transaction legs cannot be re-categorized through the API and are reported instead. " +
+      "Defaults to dry_run=true.",
     inputSchema: {
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       category_id: z.string().describe("Category ID to delete"),
@@ -46,6 +48,11 @@ export function registerDeleteCategoryTool(server: McpServer) {
           lines.push(
             `Cleanup partially complete. "${result.sourceName}" still has ${result.skippedTransactions} transaction(s) older than 5 years, and ${result.uninspectedOldMonths} pre-cutoff month(s) were not inspected for stale budget allocations.`,
             `YNAB does not allow API writes to dates that old, so the source category cannot be deleted in the app until those entries age out.`,
+          );
+        } else if (result.splitLegs > 0 || result.failures.length > 0) {
+          // The helper already listed the split legs and failed writes above.
+          lines.push(
+            `Cleanup incomplete. "${result.sourceName}" still holds the entries listed above and cannot be deleted in the YNAB app until they are resolved.`,
           );
         } else {
           lines.push(

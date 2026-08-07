@@ -1,5 +1,6 @@
 import { getClient } from "../../ynab-client.js";
 import { formatCurrency } from "../../utils/formatting.js";
+import { getBudgetSnapshot, invalidateBudgetSnapshot, snapshotMonths } from "../../budget-snapshot.js";
 
 export interface MergeResult {
   output: string;
@@ -9,8 +10,16 @@ export interface MergeResult {
   targetName: string;
   transactionsMoved: number;
   monthsAdjusted: number;
+  /** Whole transactions eligible to move (before any write failures). */
+  transactionsTotal: number;
+  /** Months holding a non-zero source budget (before any write failures). */
+  monthsTotal: number;
   skippedTransactions: number;
   uninspectedOldMonths: number;
+  /** Split legs the API cannot re-categorize; always left in place. */
+  splitLegs: number;
+  /** Writes that failed and were left unchanged, as human-readable reasons. */
+  failures: string[];
 }
 
 // YNAB rejects writes to dates over 5 years old. Use a 7-day buffer to avoid
@@ -25,6 +34,13 @@ function fiveYearCutoff(): string {
 /**
  * Re-categorizes all transactions on the source category to the target and
  * moves all historical budgeted amounts. When dryRun is true, no writes occur.
+ *
+ * The preview reads the whole budget in a single cached request, so it costs 1
+ * API call regardless of how many months the budget spans.
+ *
+ * Throws when the merge cannot be attempted at all (unknown, deleted, internal,
+ * or identical categories). Individual write failures are reported in the
+ * result rather than thrown, so a partial merge is never lost.
  */
 export async function performCategoryMerge(
   budgetId: string,
@@ -32,8 +48,6 @@ export async function performCategoryMerge(
   targetCategoryId: string,
   dryRun: boolean
 ): Promise<MergeResult> {
-  let apiCalls = 0;
-
   // Reject a self-merge before spending any calls. Merging a category into
   // itself would double its budgeted amount and then immediately zero it,
   // wiping every month with a non-zero budget.
@@ -44,65 +58,81 @@ export async function performCategoryMerge(
     );
   }
 
-  const [sourceRes, targetRes] = await Promise.all([
-    getClient().categories.getCategoryById(budgetId, sourceCategoryId),
-    getClient().categories.getCategoryById(budgetId, targetCategoryId),
-  ]);
-  apiCalls += 2;
+  // One request covers categories, groups, transactions, subtransactions,
+  // and every month's per-category budgeted amount.
+  const { snapshot, apiCalls: readCalls } = await getBudgetSnapshot(budgetId);
+  let apiCalls = readCalls;
+  const plan = snapshot.plan;
 
-  const sourceCat = sourceRes.data.category;
-  const targetCat = targetRes.data.category;
+  const categories = plan.categories ?? [];
+  const sourceCat = categories.find((c) => c.id === sourceCategoryId);
+  const targetCat = categories.find((c) => c.id === targetCategoryId);
 
-  // A deleted category cannot receive transactions or budget amounts; the API
-  // rejects the write partway through the sequential loop.
-  if (targetCat.deleted) {
-    throw new Error(`Target category "${targetCat.name}" is deleted and cannot receive a merge.`);
+  if (!sourceCat) throw new Error(`Source category ${sourceCategoryId} not found in this budget.`);
+  if (!targetCat) throw new Error(`Target category ${targetCategoryId} not found in this budget.`);
+  if (sourceCat.deleted) throw new Error(`Source category "${sourceCat.name}" is deleted; there is nothing to merge.`);
+  if (targetCat.deleted) throw new Error(`Target category "${targetCat.name}" is deleted and cannot receive a merge.`);
+
+  // Internal groups hold Credit Card Payment categories and Inflow: Ready to
+  // Assign. The API rejects writes to them, and it would do so partway through
+  // the sequential loop, after some months had been rewritten.
+  const internalGroupIds = new Set(
+    (plan.category_groups ?? []).filter((g) => g.internal).map((g) => g.id)
+  );
+  if (internalGroupIds.has(targetCat.category_group_id)) {
+    throw new Error(
+      `Target category "${targetCat.name}" belongs to an internal category group ` +
+        `(Credit Card Payments or Inflow: Ready to Assign). The API does not permit assigning ` +
+        `transactions to it.`
+    );
   }
-  if (sourceCat.deleted) {
-    throw new Error(`Source category "${sourceCat.name}" is deleted; there is nothing to merge.`);
+  if (internalGroupIds.has(sourceCat.category_group_id)) {
+    throw new Error(
+      `Source category "${sourceCat.name}" belongs to an internal category group and cannot be merged.`
+    );
   }
 
   const cutoff = fiveYearCutoff();
 
-  const txnRes = await getClient().transactions.getTransactionsByCategory(
-    budgetId, sourceCategoryId
+  // Transactions to move. Split legs are subtransactions: the API cannot update
+  // subtransactions on an existing split, and a bulk update keyed by the
+  // subtransaction id would silently address the wrong record.
+  const sourceTransactions = (plan.transactions ?? []).filter(
+    (t) => !t.deleted && t.category_id === sourceCategoryId
   );
-  apiCalls += 1;
-  const allTransactions = txnRes.data.transactions;
-  const transactions = allTransactions.filter((t) => t.date >= cutoff);
-  const skippedTransactions = allTransactions.length - transactions.length;
+  const transactions = sourceTransactions.filter((t) => t.date >= cutoff);
+  const skippedTransactions = sourceTransactions.length - transactions.length;
 
-  const monthsRes = await getClient().months.getPlanMonths(budgetId);
-  apiCalls += 1;
-  const allMonths = monthsRes.data.months.filter((m) => m.month >= cutoff);
-  const uninspectedOldMonths = monthsRes.data.months.length - allMonths.length;
+  const parentById = new Map((plan.transactions ?? []).map((t) => [t.id, t]));
+  const splitLegs = (plan.subtransactions ?? []).filter(
+    (s) => !s.deleted && s.category_id === sourceCategoryId
+  );
 
-  const monthsToAdjust: Array<{
-    month: string;
-    sourceBudgeted: number;
-    targetBudgeted: number;
-  }> = [];
+  // Months where the source category holds a budgeted amount.
+  const allMonths = snapshotMonths(snapshot);
+  const months = allMonths.filter((m) => m.month >= cutoff);
+  const uninspectedOldMonths = allMonths.length - months.length;
 
-  for (const monthSummary of allMonths) {
-    const monthDetail = await getClient().months.getPlanMonth(budgetId, monthSummary.month);
-    apiCalls += 1;
-
-    const categories = monthDetail.data.month.categories ?? [];
-    const sourceMonthCat = categories.find((c) => c.id === sourceCategoryId);
-    const targetMonthCat = categories.find((c) => c.id === targetCategoryId);
-
-    if (sourceMonthCat && sourceMonthCat.budgeted !== 0) {
-      monthsToAdjust.push({
-        month: monthSummary.month,
-        sourceBudgeted: sourceMonthCat.budgeted,
-        targetBudgeted: targetMonthCat?.budgeted ?? 0,
-      });
-    }
+  const monthsToAdjust: Array<{ month: string; sourceBudgeted: number; targetBudgeted: number }> = [];
+  for (const month of months) {
+    const sourceMonthCat = month.categories.find((c) => c.id === sourceCategoryId);
+    if (!sourceMonthCat || sourceMonthCat.budgeted === 0) continue;
+    const targetMonthCat = month.categories.find((c) => c.id === targetCategoryId);
+    monthsToAdjust.push({
+      month: month.month,
+      sourceBudgeted: sourceMonthCat.budgeted,
+      targetBudgeted: targetMonthCat?.budgeted ?? 0,
+    });
   }
 
-  const projectedUpdateCalls =
-    (transactions.length > 0 ? 1 : 0) +
-    monthsToAdjust.length * 2;
+  const writeCalls = (transactions.length > 0 ? 1 : 0) + monthsToAdjust.length * 2;
+
+  const splitLines = (indent: string) =>
+    splitLegs.map((leg) => {
+      const parent = parentById.get(leg.transaction_id);
+      const where = parent ? `${parent.date} ` : "";
+      return `${indent}${where}${formatCurrency(leg.amount)} (split leg of transaction ${leg.transaction_id})`;
+    });
 
   const skipParts: string[] = [];
   if (skippedTransactions > 0) {
@@ -136,9 +166,17 @@ export async function performCategoryMerge(
       lines.push(``);
     }
 
-    lines.push(`API calls used so far: ${apiCalls}`);
-    lines.push(`Additional calls needed to execute: ${transactions.length > 0 ? 1 : 0} (transactions) + ${monthsToAdjust.length * 2} (budget updates) = ${projectedUpdateCalls}`);
-    lines.push(`Total estimated: ${apiCalls + projectedUpdateCalls}`);
+    if (splitLegs.length > 0) {
+      lines.push(
+        `Cannot be moved: ${splitLegs.length} split transaction leg(s). The API does not support`,
+        `updating subtransactions on an existing split, so these must be re-categorized in the YNAB app:`,
+        ...splitLines("  "),
+        ``
+      );
+    }
+
+    lines.push(`API calls used: ${apiCalls}`);
+    lines.push(`Additional calls needed to execute: ${transactions.length > 0 ? 1 : 0} (transactions) + ${monthsToAdjust.length * 2} (budget updates) = ${writeCalls}`);
 
     return {
       output: lines.join("\n"),
@@ -148,50 +186,85 @@ export async function performCategoryMerge(
       targetName: targetCat.name,
       transactionsMoved: 0,
       monthsAdjusted: 0,
+      transactionsTotal: transactions.length,
+      monthsTotal: monthsToAdjust.length,
       skippedTransactions,
       uninspectedOldMonths,
+      splitLegs: splitLegs.length,
+      failures: [],
     };
   }
 
+  // Execute: re-categorize whole transactions.
+  const failures: string[] = [];
   let transactionsMoved = 0;
   if (transactions.length > 0) {
-    await getClient().transactions.updateTransactions(budgetId, {
-      transactions: transactions.map((t) => ({
-        id: t.id,
-        category_id: targetCategoryId,
-      })),
-    });
+    try {
+      await getClient().transactions.updateTransactions(budgetId, {
+        transactions: transactions.map((t) => ({
+          id: t.id,
+          category_id: targetCategoryId,
+        })),
+      });
+      transactionsMoved = transactions.length;
+    } catch (e: any) {
+      failures.push(`transactions: ${e.message}`);
+    }
     apiCalls += 1;
-    transactionsMoved = transactions.length;
   }
 
+  // Execute: move budgeted amounts, one month at a time. A failure part way
+  // through leaves earlier months already written, so record exactly which
+  // months landed rather than throwing the whole result away.
   let monthsAdjusted = 0;
   for (const m of monthsToAdjust) {
-    const newTargetBudgeted = m.targetBudgeted + m.sourceBudgeted;
-
-    await getClient().categories.updateMonthCategory(
-      budgetId, m.month, targetCategoryId,
-      { category: { budgeted: newTargetBudgeted } }
-    );
-    apiCalls += 1;
-
-    await getClient().categories.updateMonthCategory(
-      budgetId, m.month, sourceCategoryId,
-      { category: { budgeted: 0 } }
-    );
-    apiCalls += 1;
-
-    monthsAdjusted += 1;
+    try {
+      await getClient().categories.updateMonthCategory(
+        budgetId, m.month, targetCategoryId,
+        { category: { budgeted: m.targetBudgeted + m.sourceBudgeted } }
+      );
+      apiCalls += 1;
+      await getClient().categories.updateMonthCategory(
+        budgetId, m.month, sourceCategoryId,
+        { category: { budgeted: 0 } }
+      );
+      apiCalls += 1;
+      monthsAdjusted += 1;
+    } catch (e: any) {
+      apiCalls += 1;
+      failures.push(`${m.month}: ${e.message}`);
+    }
   }
+
+  invalidateBudgetSnapshot(budgetId);
 
   const lines = [
     `Merged "${sourceCat.name}" -> "${targetCat.name}"`,
     ``,
-    `Transactions re-categorized: ${transactionsMoved}`,
-    `Monthly budgets adjusted: ${monthsAdjusted}`,
+    `Transactions re-categorized: ${transactionsMoved} of ${transactions.length}`,
+    `Monthly budgets adjusted: ${monthsAdjusted} of ${monthsToAdjust.length}`,
   ];
   if (skipNote) lines.push(skipNote);
   lines.push(`Total API calls used: ${apiCalls}`);
+
+  if (splitLegs.length > 0) {
+    lines.push(
+      ``,
+      `Not moved: ${splitLegs.length} split transaction leg(s), which the API cannot re-categorize.`,
+      `Re-categorize these in the YNAB app:`,
+      ...splitLines("  ")
+    );
+  }
+
+  if (failures.length > 0) {
+    lines.push(
+      ``,
+      `${failures.length} operation(s) failed and were left unchanged:`,
+      ...failures.map((f) => `  - ${f}`),
+      ``,
+      `Everything not listed above was applied. Re-run to retry the failures.`
+    );
+  }
 
   return {
     output: lines.join("\n"),
@@ -201,7 +274,11 @@ export async function performCategoryMerge(
     targetName: targetCat.name,
     transactionsMoved,
     monthsAdjusted,
+    transactionsTotal: transactions.length,
+    monthsTotal: monthsToAdjust.length,
     skippedTransactions,
     uninspectedOldMonths,
+    splitLegs: splitLegs.length,
+    failures,
   };
 }

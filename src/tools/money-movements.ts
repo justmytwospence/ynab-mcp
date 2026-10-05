@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { getMoneyMovementsClient } from "../ynab-client.js";
 import { textResult, errorResult, formatCurrency } from "../utils/formatting.js";
 
@@ -7,9 +7,9 @@ export function registerMoneyMovementTools(server: McpServer) {
   server.registerTool("list_money_movements", {
     title: "List Money Movements",
     description: "[1 API call] List all money movements for a budget (funds moved between categories)",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ budget_id }) => {
     try {
@@ -30,10 +30,10 @@ export function registerMoneyMovementTools(server: McpServer) {
   server.registerTool("get_month_money_movements", {
     title: "Get Month Money Movements",
     description: "[1 API call] Get money movements for a specific month",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       month: z.string().describe("Month in YYYY-MM-DD format (first of month) or 'current'"),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ budget_id, month }) => {
     try {
@@ -54,9 +54,9 @@ export function registerMoneyMovementTools(server: McpServer) {
   server.registerTool("list_money_movement_groups", {
     title: "List Money Movement Groups",
     description: "[1 API call] List all money movement groups for a budget",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ budget_id }) => {
     try {
@@ -75,10 +75,10 @@ export function registerMoneyMovementTools(server: McpServer) {
   server.registerTool("get_month_money_movement_groups", {
     title: "Get Month Money Movement Groups",
     description: "[1 API call] Get money movement groups for a specific month",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       month: z.string().describe("Month in YYYY-MM-DD format (first of month) or 'current'"),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ budget_id, month }) => {
     try {

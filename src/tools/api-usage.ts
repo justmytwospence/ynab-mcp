@@ -1,6 +1,7 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { apiUsageTracker } from "../utils/api-usage.js";
 import { textResult } from "../utils/formatting.js";
+import { z } from "zod";
 
 export function registerApiUsageTools(server: McpServer) {
   server.registerTool("get_api_usage", {
@@ -10,7 +11,7 @@ export function registerApiUsageTools(server: McpServer) {
       "Use this before batch operations to ensure you have enough budget. " +
       "This counts only requests made by this process: the limit is per access token, so the user's own YNAB " +
       "web and mobile sessions consume the same quota invisibly. Treat the count as a lower bound.",
-    inputSchema: {},
+    inputSchema: z.object({}),
     annotations: { readOnlyHint: true },
   }, async () => {
     const usage = apiUsageTracker.getUsage();

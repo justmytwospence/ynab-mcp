@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { textResult, errorResult } from "../utils/formatting.js";
 import { performCategoryMerge } from "./lib/category-merge.js";
 
@@ -16,7 +16,7 @@ export function registerDeleteCategoryTool(server: McpServer) {
       "with a non-zero budget. " +
       "Split transaction legs cannot be re-categorized through the API and are reported instead. " +
       "Defaults to dry_run=true.",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       category_id: z.string().describe("Category ID to delete"),
       replacement_category_id: z.string().describe(
@@ -24,7 +24,7 @@ export function registerDeleteCategoryTool(server: McpServer) {
         "Required even if the source has no transactions, to keep behavior predictable."
       ),
       dry_run: z.boolean().default(true).describe("Preview changes without executing (default: true)"),
-    },
+    }),
     annotations: { readOnlyHint: false, destructiveHint: true },
   }, async ({ budget_id, category_id, replacement_category_id, dry_run }) => {
     try {

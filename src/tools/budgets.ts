@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { getClient } from "../ynab-client.js";
 import { textResult, errorResult, formatCurrency, setActiveCurrencyFormat } from "../utils/formatting.js";
 import { getBudgetSnapshot, snapshotMonths } from "../budget-snapshot.js";
@@ -8,9 +8,9 @@ export function registerBudgetTools(server: McpServer) {
   server.registerTool("list_budgets", {
     title: "List Budgets",
     description: "[1 API call] List all budgets the user has access to, with optional account info",
-    inputSchema: {
+    inputSchema: z.object({
       include_accounts: z.boolean().optional().describe("Include accounts for each budget"),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ include_accounts }) => {
     try {
@@ -39,10 +39,10 @@ export function registerBudgetTools(server: McpServer) {
       "and every budget month with its per-category budgeted/activity/balance. The response is cached in " +
       "memory and refreshed by delta, so repeat calls and the workflows built on it cost one request or none. " +
       "Use 'last-used' for the most recently accessed budget.",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       force_refresh: z.boolean().default(false).describe("Discard the cached snapshot and refetch the full export"),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ budget_id, force_refresh }) => {
     try {
@@ -79,9 +79,9 @@ export function registerBudgetTools(server: McpServer) {
   server.registerTool("get_budget_settings", {
     title: "Get Budget Settings",
     description: "[1 API call] Get a budget's date and currency format settings",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ budget_id }) => {
     try {

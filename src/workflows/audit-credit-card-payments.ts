@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import type { AccountBase, CategoryBase, TransactionSummaryBase } from "ynab";
 import { getClient } from "../ynab-client.js";
 import { textResult, errorResult, formatCurrency, dollarsToMilliunits } from "../utils/formatting.js";
@@ -61,7 +61,7 @@ export function registerCreditCardAuditTools(server: McpServer) {
       "attributes each change to Starting Balance debt or credit overspending, and reports only the " +
       "unattributed residual, which is what 'the numbers drifted' actually means. " +
       "Set apply=true to correct residual months by adjusting the assigned amount (adds 1 API call per month).",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       since_month: z.string().optional().describe("Only audit months on or after this date (YYYY-MM-DD, first of month)"),
       account_id: z.string().optional().describe("Audit a specific credit account only (by account ID)"),
@@ -70,7 +70,7 @@ export function registerCreditCardAuditTools(server: McpServer) {
       verbose: z.boolean().default(false).describe("Show every month, not just months with an unattributed residual"),
       apply: z.boolean().default(false).describe("Assign money to close the unattributed residual in each flagged month (default: false, audit only)"),
       allow_negative_ready_to_assign: z.boolean().default(false).describe("Permit corrections that drive a month's Ready to Assign below zero"),
-    },
+    }),
     annotations: { readOnlyHint: false, destructiveHint: true },
   }, async ({ budget_id, since_month, account_id, include_closed, tolerance, verbose, apply, allow_negative_ready_to_assign }) => {
     try {

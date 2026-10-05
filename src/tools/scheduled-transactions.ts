@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { getClient } from "../ynab-client.js";
 import { textResult, errorResult, formatCurrency, dollarsToMilliunits } from "../utils/formatting.js";
 
@@ -14,10 +14,10 @@ export function registerScheduledTransactionTools(server: McpServer) {
   server.registerTool("list_scheduled_transactions", {
     title: "List Scheduled Transactions",
     description: "[1 API call] List all scheduled (recurring) transactions for a budget",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ budget_id, last_knowledge_of_server }) => {
     try {
@@ -41,10 +41,10 @@ export function registerScheduledTransactionTools(server: McpServer) {
   server.registerTool("get_scheduled_transaction", {
     title: "Get Scheduled Transaction",
     description: "[1 API call] Get details for a single scheduled transaction",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       scheduled_transaction_id: z.string().describe("The scheduled transaction ID"),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ budget_id, scheduled_transaction_id }) => {
     try {
@@ -79,7 +79,7 @@ export function registerScheduledTransactionTools(server: McpServer) {
   server.registerTool("create_scheduled_transaction", {
     title: "Create Scheduled Transaction",
     description: "[1 API call] Create a new scheduled (recurring) transaction. Date must be in the future (up to 5 years).",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       account_id: z.string().describe("Account ID"),
       date: z.string().describe("First occurrence date (YYYY-MM-DD), must be future"),
@@ -90,7 +90,7 @@ export function registerScheduledTransactionTools(server: McpServer) {
       category_id: z.string().optional().describe("Category ID (cannot be credit card payment)"),
       memo: z.string().optional().describe("Memo"),
       flag_color: z.enum(FLAG_COLORS).optional().describe("Flag color"),
-    },
+    }),
     annotations: { readOnlyHint: false },
   }, async ({ budget_id, account_id, date, amount, frequency, payee_id, payee_name, category_id, memo, flag_color }) => {
     try {
@@ -119,7 +119,7 @@ export function registerScheduledTransactionTools(server: McpServer) {
   server.registerTool("update_scheduled_transaction", {
     title: "Update Scheduled Transaction",
     description: "[1 API call] Update an existing scheduled transaction",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       scheduled_transaction_id: z.string().describe("The scheduled transaction ID"),
       account_id: z.string().describe("Account ID (required even if unchanged)"),
@@ -131,7 +131,7 @@ export function registerScheduledTransactionTools(server: McpServer) {
       category_id: z.string().optional().describe("New category ID"),
       memo: z.string().optional().describe("New memo"),
       flag_color: z.enum(FLAG_COLORS).optional().describe("New flag color"),
-    },
+    }),
     annotations: { readOnlyHint: false },
   }, async ({ budget_id, scheduled_transaction_id, account_id, date, amount, frequency, payee_id, payee_name, category_id, memo, flag_color }) => {
     try {
@@ -162,10 +162,10 @@ export function registerScheduledTransactionTools(server: McpServer) {
   server.registerTool("delete_scheduled_transaction", {
     title: "Delete Scheduled Transaction",
     description: "[1 API call] Delete a scheduled transaction",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       scheduled_transaction_id: z.string().describe("The scheduled transaction ID to delete"),
-    },
+    }),
     annotations: { readOnlyHint: false, destructiveHint: true },
   }, async ({ budget_id, scheduled_transaction_id }) => {
     try {

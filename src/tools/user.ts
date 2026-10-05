@@ -1,4 +1,4 @@
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { getClient } from "../ynab-client.js";
 import { textResult, errorResult } from "../utils/formatting.js";
 

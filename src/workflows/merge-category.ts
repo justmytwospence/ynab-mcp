@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { textResult, errorResult } from "../utils/formatting.js";
 import { performCategoryMerge } from "./lib/category-merge.js";
 
@@ -15,12 +15,12 @@ export function registerWorkflowTools(server: McpServer) {
       "Split transaction legs cannot be re-categorized through the API and are reported instead. " +
       "After merging, the source category will have zero transactions and zero budgeted amounts across all months - " +
       "you can then manually hide/delete it in the YNAB app.",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       source_category_id: z.string().describe("Category ID to merge FROM (will be emptied)"),
       target_category_id: z.string().describe("Category ID to merge INTO (will receive transactions and budgeted amounts)"),
       dry_run: z.boolean().default(true).describe("Preview changes without executing (default: true)"),
-    },
+    }),
     annotations: { readOnlyHint: false, destructiveHint: true },
   }, async ({ budget_id, source_category_id, target_category_id, dry_run }) => {
     try {

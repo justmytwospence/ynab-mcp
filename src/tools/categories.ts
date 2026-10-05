@@ -1,6 +1,6 @@
 import { z } from "zod";
 import type { CategoryResponse } from "ynab";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { getClient, requestUntyped } from "../ynab-client.js";
 import { textResult, errorResult, formatCurrency, dollarsToMilliunits, attributes } from "../utils/formatting.js";
 
@@ -12,13 +12,13 @@ export function registerCategoryTools(server: McpServer) {
       "and marked [hidden] - they still hold balances, and stranded money usually lives there. Internal groups " +
       "(Credit Card Payments, Internal Master Category) are marked [internal]. Deleted entities are only ever " +
       "returned by delta requests.",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       include_hidden: z.boolean().default(true).describe("Include hidden categories and groups (default: true)"),
       include_internal: z.boolean().default(true).describe("Include internal categories and groups - Credit Card Payments and Inflow: Ready to Assign (default: true). Exclude them from spending analysis, or Ready to Assign reads as the largest expense."),
       include_deleted: z.boolean().default(false).describe("Include deleted categories and groups (only present in delta requests)"),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ budget_id, include_hidden, include_internal, include_deleted, last_knowledge_of_server }) => {
     try {
@@ -54,10 +54,10 @@ export function registerCategoryTools(server: McpServer) {
       "[1 API call] Get details for a single category. Goal fields describe the goal AS CONFIGURED NOW - the API " +
       "keeps no target history, so goal figures reported for a month earlier than goal_creation_month describe a " +
       "target that did not exist then and must not be read as a verdict on that month.",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       category_id: z.string().describe("The category ID"),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ budget_id, category_id }) => {
     try {
@@ -87,7 +87,7 @@ export function registerCategoryTools(server: McpServer) {
   server.registerTool("create_category", {
     title: "Create Category",
     description: "[1 API call] Create a new category in a budget",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       name: z.string().describe("Category name"),
       category_group_id: z.string().describe("ID of the category group to add this category to"),
@@ -95,7 +95,7 @@ export function registerCategoryTools(server: McpServer) {
       goal_target: z.number().optional().describe("Goal target amount in dollars"),
       goal_target_date: z.string().optional().describe("Goal target date (YYYY-MM-DD)"),
       goal_frequency: z.enum(["monthly", "weekly", "yearly"]).optional().describe("Configure a recurring NEED target repeating at this frequency. REPLACES any existing target on the category. Requires goal_target, cannot be combined with goal_target_date, and is not supported for Credit Card Payment categories."),
-    },
+    }),
     annotations: { readOnlyHint: false },
   }, async ({ budget_id, name, category_group_id, note, goal_target, goal_target_date, goal_frequency }) => {
     try {
@@ -130,7 +130,7 @@ export function registerCategoryTools(server: McpServer) {
       "to monthly, weekly, or yearly, REPLACING any existing target. Other cadences (every N months, every 2 years) " +
       "and a specific goal_day cannot be set through the API, and goal_type cannot be changed once a goal exists. " +
       "There is no way to hide or delete a category via the API.",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       category_id: z.string().describe("The category ID to update"),
       name: z.string().optional().describe("New category name"),
@@ -140,7 +140,7 @@ export function registerCategoryTools(server: McpServer) {
       goal_target_date: z.string().optional().describe("New goal target date (YYYY-MM-DD)"),
       goal_needs_whole_amount: z.boolean().optional().describe("NEED goals only: true = 'Set aside another...', false = 'Refill up to...'"),
       goal_frequency: z.enum(["monthly", "weekly", "yearly"]).optional().describe("Configure a recurring NEED target repeating at this frequency. REPLACES any existing target on the category. Requires goal_target, cannot be combined with goal_target_date, and is not supported for Credit Card Payment categories."),
-    },
+    }),
     annotations: { readOnlyHint: false, destructiveHint: true },
   }, async ({ budget_id, category_id, name, note, category_group_id, goal_target, goal_target_date, goal_needs_whole_amount, goal_frequency }) => {
     try {
@@ -174,11 +174,11 @@ export function registerCategoryTools(server: McpServer) {
       "[1 API call] Get a category's budget details for a specific month. Goal fields reflect the goal as it is " +
       "configured TODAY, evaluated against that month - there is no target revision history - so a month earlier " +
       "than goal_creation_month is marked not assessable rather than judged.",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       month: z.string().describe("Month in YYYY-MM-DD format (first of month) or 'current'"),
       category_id: z.string().describe("The category ID"),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ budget_id, month, category_id }) => {
     try {
@@ -208,12 +208,12 @@ export function registerCategoryTools(server: McpServer) {
   server.registerTool("update_month_category", {
     title: "Update Month Category Budget",
     description: "[1 API call] Update the budgeted/assigned amount for a category in a specific month. This is how you allocate money to categories.",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       month: z.string().describe("Month in YYYY-MM-DD format (first of month) or 'current'"),
       category_id: z.string().describe("The category ID"),
       budgeted: z.number().describe("Amount to budget/assign in dollars (e.g., 500.00)"),
-    },
+    }),
     annotations: { readOnlyHint: false },
   }, async ({ budget_id, month, category_id, budgeted }) => {
     try {
@@ -230,10 +230,10 @@ export function registerCategoryTools(server: McpServer) {
   server.registerTool("create_category_group", {
     title: "Create Category Group",
     description: "[1 API call] Create a new category group in a budget",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       name: z.string().max(50).describe("Category group name (max 50 characters)"),
-    },
+    }),
     annotations: { readOnlyHint: false },
   }, async ({ budget_id, name }) => {
     try {
@@ -250,11 +250,11 @@ export function registerCategoryTools(server: McpServer) {
   server.registerTool("update_category_group", {
     title: "Update Category Group",
     description: "[1 API call] Update a category group's name",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       category_group_id: z.string().describe("The category group ID"),
       name: z.string().max(50).describe("New name (max 50 characters)"),
-    },
+    }),
     annotations: { readOnlyHint: false },
   }, async ({ budget_id, category_group_id, name }) => {
     try {

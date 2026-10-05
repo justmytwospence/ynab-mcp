@@ -1,4 +1,4 @@
-import { McpServer, ResourceTemplate } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer, ResourceTemplate } from "@modelcontextprotocol/server";
 import { getClient } from "./ynab-client.js";
 import { formatCurrency, attributes } from "./utils/formatting.js";
 import { apiUsageTracker } from "./utils/api-usage.js";

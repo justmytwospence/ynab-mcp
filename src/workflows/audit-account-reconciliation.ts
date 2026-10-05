@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { getClient } from "../ynab-client.js";
 import { textResult, errorResult, formatCurrency, dollarsToMilliunits } from "../utils/formatting.js";
 import { getReconciliationAnchor } from "./lib/reconciliation.js";
@@ -17,7 +17,7 @@ export function registerAccountReconciliationAuditTool(server: McpServer) {
       "as reconciled and, when target_balance is provided and a gap exists, creates a " +
       "Reconciliation Balance Adjustment transaction to absorb it. " +
       "Costs 2 API calls (account + transactions) for the audit, plus 1-2 more if apply=true.",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       account_id: z.string().describe("The account to audit"),
       target_balance: z.number().optional().describe(
@@ -29,7 +29,7 @@ export function registerAccountReconciliationAuditTool(server: McpServer) {
         "when target_balance != cleared_balance, creates a Reconciliation Balance Adjustment for the gap. " +
         "Default: false (audit only)."
       ),
-    },
+    }),
     annotations: { readOnlyHint: false },
   }, async ({ budget_id, account_id, target_balance, apply }) => {
     try {

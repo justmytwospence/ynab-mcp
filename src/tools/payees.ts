@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { getClient } from "../ynab-client.js";
 import { textResult, errorResult } from "../utils/formatting.js";
 
@@ -10,7 +10,7 @@ export function registerPayeeTools(server: McpServer) {
       "[1 API call] List payees for a budget. Budgets often have 1000+ payees; " +
       "use `name_filter` (case-insensitive substring) to avoid loading the full list. " +
       "Use `limit` to cap result size when listing without a filter.",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       name_filter: z.string().optional().describe(
         "Case-insensitive substring filter on payee name. Highly recommended when looking up a known payee."
@@ -19,7 +19,7 @@ export function registerPayeeTools(server: McpServer) {
         "Maximum number of payees to return (after filtering). Useful when you just want the top matches."
       ),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ budget_id, name_filter, limit, last_knowledge_of_server }) => {
     try {
@@ -55,10 +55,10 @@ export function registerPayeeTools(server: McpServer) {
   server.registerTool("get_payee", {
     title: "Get Payee",
     description: "[1 API call] Get details for a single payee",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       payee_id: z.string().describe("The payee ID"),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ budget_id, payee_id }) => {
     try {
@@ -78,11 +78,11 @@ export function registerPayeeTools(server: McpServer) {
   server.registerTool("update_payee", {
     title: "Update Payee",
     description: "[1 API call] Update a payee's name",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       payee_id: z.string().describe("The payee ID"),
       name: z.string().max(500).describe("New payee name (max 500 characters)"),
-    },
+    }),
     annotations: { readOnlyHint: false },
   }, async ({ budget_id, payee_id, name }) => {
     try {

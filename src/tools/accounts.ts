@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { getClient } from "../ynab-client.js";
 import { textResult, errorResult, formatCurrency } from "../utils/formatting.js";
 import { getReconciliationAnchor } from "../workflows/lib/reconciliation.js";
@@ -14,10 +14,10 @@ export function registerAccountTools(server: McpServer) {
   server.registerTool("list_accounts", {
     title: "List Accounts",
     description: "[1 API call] List all accounts for a budget including balances and types",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ budget_id, last_knowledge_of_server }) => {
     try {
@@ -43,13 +43,13 @@ export function registerAccountTools(server: McpServer) {
       "Set include_reconciliation=true to also fetch the reconciliation anchor " +
       "(last reconciled date, reconciled balance, count and net of unreconciled cleared transactions) " +
       "— this costs an additional API call.",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       account_id: z.string().describe("The account ID"),
       include_reconciliation: z.boolean().default(false).describe(
         "Include reconciliation anchor info (costs +1 API call). Useful before reconciling."
       ),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ budget_id, account_id, include_reconciliation }) => {
     try {
@@ -99,12 +99,12 @@ export function registerAccountTools(server: McpServer) {
   server.registerTool("create_account", {
     title: "Create Account",
     description: "[1 API call] Create a new account in a budget",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       name: z.string().describe("Account name"),
       type: z.enum(CREATABLE_ACCOUNT_TYPES).describe("Account type (the API only supports creating these six types)"),
       balance: z.number().describe("Starting balance in dollars (e.g., 1000.50)"),
-    },
+    }),
     annotations: { readOnlyHint: false },
   }, async ({ budget_id, name, type, balance }) => {
     try {

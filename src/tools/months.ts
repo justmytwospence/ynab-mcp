@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { getClient } from "../ynab-client.js";
 import { textResult, errorResult, formatCurrency, attributes } from "../utils/formatting.js";
 
@@ -7,10 +7,10 @@ export function registerMonthTools(server: McpServer) {
   server.registerTool("list_months", {
     title: "List Budget Months",
     description: "[1 API call] List all budget months for a budget, showing income, budgeted, activity, and ready to assign",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ budget_id, last_knowledge_of_server }) => {
     try {
@@ -30,12 +30,12 @@ export function registerMonthTools(server: McpServer) {
   server.registerTool("get_month", {
     title: "Get Budget Month",
     description: "[1 API call] Get detailed info for a single budget month including all category balances. Use 'current' for the current month. Hidden categories are included and marked [hidden].",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       month: z.string().describe("Month in YYYY-MM-DD format (first of month) or 'current'"),
       include_hidden: z.boolean().default(true).describe("Include hidden categories, marked [hidden] (default: true)"),
       include_deleted: z.boolean().default(false).describe("Include deleted categories (only present in delta requests)"),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ budget_id, month, include_hidden, include_deleted }) => {
     try {

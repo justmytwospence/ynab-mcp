@@ -1,15 +1,15 @@
 import { z } from "zod";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 
 export function registerPrompts(server: McpServer) {
   server.registerPrompt("monthly-review", {
     title: "Monthly Budget Review",
     description:
       "Review a budget month: overspent categories, spending changes, underfunded goals, and credit card mismatches",
-    argsSchema: {
+    argsSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       month: z.string().describe("Month to review (YYYY-MM-DD, first of month, e.g. 2026-03-01)"),
-    },
+    }),
   }, async ({ budget_id, month }) => ({
     messages: [
       {
@@ -37,11 +37,11 @@ export function registerPrompts(server: McpServer) {
     title: "Transaction Audit",
     description:
       "Audit recent transactions for uncategorized, unapproved, possible duplicates, and unusual amounts",
-    argsSchema: {
+    argsSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       account_id: z.string().describe("Account ID to audit"),
       since_date: z.string().describe("Start date for audit window (YYYY-MM-DD)"),
-    },
+    }),
   }, async ({ budget_id, account_id, since_date }) => ({
     messages: [
       {
@@ -67,9 +67,9 @@ export function registerPrompts(server: McpServer) {
     title: "Budget Setup Guide",
     description:
       "Guided walkthrough for setting up a new or existing budget: accounts, categories, targets, and scheduled transactions",
-    argsSchema: {
+    argsSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
-    },
+    }),
   }, async ({ budget_id }) => ({
     messages: [
       {
@@ -96,10 +96,10 @@ export function registerPrompts(server: McpServer) {
     title: "Spending Analysis",
     description:
       "Analyze spending patterns: category breakdown, budget vs. actual, and top payees",
-    argsSchema: {
+    argsSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       month: z.string().describe("Month to analyze (YYYY-MM-DD, first of month, e.g. 2026-03-01)"),
-    },
+    }),
   }, async ({ budget_id, month }) => ({
     messages: [
       {
@@ -125,11 +125,11 @@ export function registerPrompts(server: McpServer) {
     title: "Reconcile Account",
     description:
       "Walk through reconciling a YNAB account against a bank balance: diagnose discrepancies, identify missing transactions, and close out",
-    argsSchema: {
+    argsSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       account_id: z.string().describe("The account to reconcile"),
       target_balance: z.string().describe("The actual balance from the bank as a dollar amount (e.g. '-4499.74' for a credit card)"),
-    },
+    }),
   }, async ({ budget_id, account_id, target_balance }) => ({
     messages: [
       {
@@ -159,10 +159,10 @@ export function registerPrompts(server: McpServer) {
     title: "Credit Card Payment Audit",
     description:
       "Audit each credit card's funding gap for unexplained month-over-month drift, with optional auto-fix",
-    argsSchema: {
+    argsSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       since_month: z.string().optional().describe("Only audit months on or after this date (YYYY-MM-DD, first of month)"),
-    },
+    }),
   }, async ({ budget_id, since_month }) => ({
     messages: [
       {

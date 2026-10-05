@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { getClient } from "../ynab-client.js";
 import { textResult, errorResult, formatCurrency, dollarsToMilliunits } from "../utils/formatting.js";
 import type { TransactionDetail, HybridTransaction } from "ynab";
@@ -35,14 +35,14 @@ export function registerTransactionTools(server: McpServer) {
     description:
       "[1 API call] List transactions for a budget with optional filters. Returns most recent transactions first. " +
       "IMPORTANT: when since_date is omitted the server returns only the LAST TWELVE MONTHS, not all history, and says nothing about the truncation. Pass since_date explicitly for historical work, or use get_budget, whose full export has no date window.",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       since_date: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD). Omitting this defaults to one year ago, silently truncating history."),
       until_date: z.string().optional().describe("Only return transactions on or before this date (YYYY-MM-DD)"),
       type: z.enum(TRANSACTION_TYPES).optional().describe("Filter by 'uncategorized' or 'unapproved'"),
       cleared: z.enum(CLEARED_FILTER_VALUES).optional().describe(CLEARED_FILTER_DESC),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ budget_id, since_date, until_date, type, cleared, last_knowledge_of_server }) => {
     try {
@@ -69,10 +69,10 @@ export function registerTransactionTools(server: McpServer) {
   server.registerTool("get_transaction", {
     title: "Get Transaction",
     description: "[1 API call] Get details for a single transaction",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       transaction_id: z.string().describe("The transaction ID"),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ budget_id, transaction_id }) => {
     try {
@@ -106,7 +106,7 @@ export function registerTransactionTools(server: McpServer) {
   server.registerTool("create_transaction", {
     title: "Create Transaction",
     description: "[1 API call] Create a new transaction. Amounts are in dollars (positive for inflows, negative for outflows). For split transactions, set category_id to null and provide subtransactions.",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       account_id: z.string().describe("Account ID for the transaction"),
       date: z.string().describe("Transaction date (YYYY-MM-DD)"),
@@ -125,7 +125,7 @@ export function registerTransactionTools(server: McpServer) {
         category_id: z.string().optional(),
         memo: z.string().optional(),
       })).optional().describe("Split transaction parts (amounts must sum to the total)"),
-    },
+    }),
     annotations: { readOnlyHint: false },
   }, async ({ budget_id, account_id, date, amount, payee_id, payee_name, category_id, memo, cleared, approved, flag_color, subtransactions }) => {
     try {
@@ -166,7 +166,7 @@ export function registerTransactionTools(server: McpServer) {
   server.registerTool("create_transactions", {
     title: "Create Multiple Transactions",
     description: "[1 API call, bulk] Create multiple transactions at once. Each transaction needs account_id, date, and amount at minimum.",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       transactions: z.array(z.object({
         account_id: z.string().describe("Account ID"),
@@ -180,7 +180,7 @@ export function registerTransactionTools(server: McpServer) {
         approved: z.boolean().optional(),
         flag_color: z.enum(FLAG_COLORS).optional(),
       })).describe("Array of transactions to create"),
-    },
+    }),
     annotations: { readOnlyHint: false },
   }, async ({ budget_id, transactions }) => {
     try {
@@ -208,7 +208,7 @@ export function registerTransactionTools(server: McpServer) {
   server.registerTool("update_transaction", {
     title: "Update Transaction",
     description: "[1 API call] Update an existing transaction. " + "Credit Card Payment categories are NOT permitted here and are silently IGNORED rather than rejected, so assigning one reports success and changes nothing. Use update_month_category to assign money to a Credit Card Payment category.",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       transaction_id: z.string().describe("The transaction ID to update"),
       account_id: z.string().optional().describe("New account ID"),
@@ -221,7 +221,7 @@ export function registerTransactionTools(server: McpServer) {
       cleared: z.enum(CLEARED_VALUES).optional().describe("New cleared status"),
       approved: z.boolean().optional().describe("New approval status"),
       flag_color: z.enum(FLAG_COLORS).optional().describe("New flag color"),
-    },
+    }),
     annotations: { readOnlyHint: false },
   }, async ({ budget_id, transaction_id, ...fields }) => {
     try {
@@ -244,7 +244,7 @@ export function registerTransactionTools(server: McpServer) {
     title: "Bulk Update Transactions",
     description: "[1 API call, bulk] Update multiple transactions at once. Each must include either id or import_id to identify the transaction. " +
       "Credit Card Payment categories are NOT permitted here and are silently IGNORED rather than rejected, so assigning one reports success and changes nothing. Use update_month_category to assign money to a Credit Card Payment category.",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       transactions: z.array(z.object({
         id: z.string().optional().describe("Transaction ID"),
@@ -260,7 +260,7 @@ export function registerTransactionTools(server: McpServer) {
         approved: z.boolean().optional(),
         flag_color: z.enum(FLAG_COLORS).optional(),
       })).describe("Transactions to update"),
-    },
+    }),
     annotations: { readOnlyHint: false },
   }, async ({ budget_id, transactions }) => {
     try {
@@ -286,10 +286,10 @@ export function registerTransactionTools(server: McpServer) {
   server.registerTool("delete_transaction", {
     title: "Delete Transaction",
     description: "[1 API call] Delete a transaction",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       transaction_id: z.string().describe("The transaction ID to delete"),
-    },
+    }),
     annotations: { readOnlyHint: false, destructiveHint: true },
   }, async ({ budget_id, transaction_id }) => {
     try {
@@ -304,9 +304,9 @@ export function registerTransactionTools(server: McpServer) {
   server.registerTool("import_transactions", {
     title: "Import Transactions",
     description: "[1 API call] Trigger an import of transactions from linked financial institutions",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
-    },
+    }),
     annotations: { readOnlyHint: false },
   }, async ({ budget_id }) => {
     try {
@@ -326,7 +326,7 @@ export function registerTransactionTools(server: McpServer) {
       "[1 API call] List transactions for a specific account. " +
       "IMPORTANT: when since_date is omitted the server returns only the LAST TWELVE MONTHS, not all history, and says nothing about the truncation. Pass since_date explicitly for historical work, or use get_budget, whose full export has no date window. " +
       "Pass cleared='unreconciled' to get exactly the transactions still pending the next reconciliation.",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       account_id: z.string().describe("The account ID"),
       since_date: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD). Omitting this defaults to one year ago, silently truncating history."),
@@ -334,7 +334,7 @@ export function registerTransactionTools(server: McpServer) {
       type: z.enum(TRANSACTION_TYPES).optional().describe("Filter by type"),
       cleared: z.enum(CLEARED_FILTER_VALUES).optional().describe(CLEARED_FILTER_DESC),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ budget_id, account_id, since_date, until_date, type, cleared, last_knowledge_of_server }) => {
     try {
@@ -360,7 +360,7 @@ export function registerTransactionTools(server: McpServer) {
   server.registerTool("list_category_transactions", {
     title: "List Category Transactions",
     description: "[1 API call] List transactions for a specific category. " + "IMPORTANT: when since_date is omitted the server returns only the LAST TWELVE MONTHS, not all history, and says nothing about the truncation. Pass since_date explicitly for historical work, or use get_budget, whose full export has no date window.",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       category_id: z.string().describe("The category ID"),
       since_date: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD). Omitting this defaults to one year ago, silently truncating history."),
@@ -368,7 +368,7 @@ export function registerTransactionTools(server: McpServer) {
       type: z.enum(TRANSACTION_TYPES).optional().describe("Filter by type"),
       cleared: z.enum(CLEARED_FILTER_VALUES).optional().describe(CLEARED_FILTER_DESC),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ budget_id, category_id, since_date, until_date, type, cleared, last_knowledge_of_server }) => {
     try {
@@ -394,7 +394,7 @@ export function registerTransactionTools(server: McpServer) {
   server.registerTool("list_payee_transactions", {
     title: "List Payee Transactions",
     description: "[1 API call] List transactions for a specific payee. " + "IMPORTANT: when since_date is omitted the server returns only the LAST TWELVE MONTHS, not all history, and says nothing about the truncation. Pass since_date explicitly for historical work, or use get_budget, whose full export has no date window.",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       payee_id: z.string().describe("The payee ID"),
       since_date: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD). Omitting this defaults to one year ago, silently truncating history."),
@@ -402,7 +402,7 @@ export function registerTransactionTools(server: McpServer) {
       type: z.enum(TRANSACTION_TYPES).optional().describe("Filter by type"),
       cleared: z.enum(CLEARED_FILTER_VALUES).optional().describe(CLEARED_FILTER_DESC),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ budget_id, payee_id, since_date, until_date, type, cleared, last_knowledge_of_server }) => {
     try {
@@ -428,7 +428,7 @@ export function registerTransactionTools(server: McpServer) {
   server.registerTool("list_month_transactions", {
     title: "List Month Transactions",
     description: "[1 API call] List transactions for a specific month",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       month: z.string().describe("Month in YYYY-MM-DD format (first of month)"),
       since_date: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD). Month-scoped, so no one-year default applies."),
@@ -436,7 +436,7 @@ export function registerTransactionTools(server: McpServer) {
       type: z.enum(TRANSACTION_TYPES).optional().describe("Filter by type"),
       cleared: z.enum(CLEARED_FILTER_VALUES).optional().describe(CLEARED_FILTER_DESC),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ budget_id, month, since_date, until_date, type, cleared, last_knowledge_of_server }) => {
     try {

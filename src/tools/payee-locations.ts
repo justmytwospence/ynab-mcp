@@ -1,5 +1,5 @@
 import { z } from "zod";
-import { McpServer } from "@modelcontextprotocol/sdk/server/mcp.js";
+import { McpServer } from "@modelcontextprotocol/server";
 import { getClient } from "../ynab-client.js";
 import { textResult, errorResult } from "../utils/formatting.js";
 
@@ -7,9 +7,9 @@ export function registerPayeeLocationTools(server: McpServer) {
   server.registerTool("list_payee_locations", {
     title: "List Payee Locations",
     description: "[1 API call] List all payee GPS locations for a budget",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ budget_id }) => {
     try {
@@ -28,10 +28,10 @@ export function registerPayeeLocationTools(server: McpServer) {
   server.registerTool("get_payee_location", {
     title: "Get Payee Location",
     description: "[1 API call] Get a single payee location by ID",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       payee_location_id: z.string().describe("The payee location ID"),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ budget_id, payee_location_id }) => {
     try {
@@ -48,10 +48,10 @@ export function registerPayeeLocationTools(server: McpServer) {
   server.registerTool("get_payee_locations_for_payee", {
     title: "Get Locations for Payee",
     description: "[1 API call] Get all GPS locations for a specific payee",
-    inputSchema: {
+    inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       payee_id: z.string().describe("The payee ID"),
-    },
+    }),
     annotations: { readOnlyHint: true },
   }, async ({ budget_id, payee_id }) => {
     try {

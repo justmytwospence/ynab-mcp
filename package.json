@@ -1,6 +1,6 @@
 {
   "name": "ynab-mcp",
-  "version": "2.0.0",
+  "version": "2.0.1",
   "description": "A comprehensive YNAB MCP server exposing the full YNAB API",
   "main": "dist/index.js",
   "bin": {

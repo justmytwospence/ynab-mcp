@@ -1,0 +1,13 @@
+# Self-host ynab-mcp: `cp .env.example .env`, fill it in, `docker compose up -d`.
+# The MCP endpoint is then http://<host>:8000/mcp (Streamable HTTP).
+services:
+  ynab-mcp:
+    image: ghcr.io/justmytwospence/ynab-mcp:2
+    restart: unless-stopped
+    environment:
+      YNAB_API_TOKEN: ${YNAB_API_TOKEN:?set YNAB_API_TOKEN in .env}
+      # Hostnames clients use to reach the server, e.g. behind a reverse proxy.
+      # Requests naming any other Host are refused (DNS-rebinding protection).
+      MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-}
+    ports:
+      - "8000:8000"

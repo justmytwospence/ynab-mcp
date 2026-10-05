@@ -7,7 +7,33 @@ An MCP (Model Context Protocol) server that exposes the full [YNAB](https://www.
 - Node.js 20+
 - A [YNAB Personal Access Token](https://app.ynab.com/settings/developer)
 
-## Installation
+## Run it as a service (Docker)
+
+```sh
+cp .env.example .env   # fill in YNAB_API_TOKEN
+docker compose up -d
+```
+
+The server speaks [Streamable HTTP](https://modelcontextprotocol.io/specification/2026-07-28)
+at `http://<host>:8000/mcp` (also at `/`), with a health check at `/health`, and serves both
+2026-07-28 and older session-based clients. Point any MCP client at it:
+
+```json
+{ "mcpServers": { "ynab": { "type": "http", "url": "http://localhost:8000/mcp" } } }
+```
+
+| Variable | Default | Meaning |
+|---|---|---|
+| `YNAB_API_TOKEN` | (required) | YNAB personal access token |
+| `MCP_TRANSPORT` | `stdio` (`http` in the image) | `stdio` or `http` |
+| `PORT` | `8000` | HTTP port |
+| `MCP_ALLOWED_HOSTS` | (any) | Comma-separated hostnames allowed in the `Host` header (set it behind a reverse proxy) |
+
+Running as a long-lived service also keeps the rate-limit accounting and the `get_budget`
+snapshot cache warm across calls. Images: `ghcr.io/justmytwospence/ynab-mcp`, published for
+amd64 and arm64 by pushing a `vX.Y.Z` tag.
+
+## Installation (stdio)
 
 ```sh
 npm install -g ynab-mcp

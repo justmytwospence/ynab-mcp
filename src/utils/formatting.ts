@@ -72,6 +72,62 @@ export function attributes(entity: { hidden?: boolean; internal?: boolean; delet
   return flags.length > 0 ? ` [${flags.join(", ")}]` : "";
 }
 
+/** The goal fields every category model carries; all optional because a category may have no goal. */
+export interface GoalFields {
+  goal_type?: string | null;
+  goal_target?: number | null;
+  goal_target_date?: string | null;
+  goal_cadence?: number | null;
+  goal_cadence_frequency?: number | null;
+  goal_needs_whole_amount?: boolean | null;
+  goal_under_funded?: number | null;
+  goal_overall_left?: number | null;
+  goal_percentage_complete?: number | null;
+  goal_snoozed_at?: string | null;
+  goal_creation_month?: string | null;
+}
+
+/**
+ * A goal's repeat cadence in words. YNAB encodes it as goal_cadence: 0 none,
+ * 1 monthly, 2 weekly, 13 yearly, and 3-12 "every goal_cadence_frequency months"
+ * (3 is the generic every-N-months code).
+ */
+export function describeCadence(cadence: number | null | undefined, frequency: number | null | undefined): string {
+  if (cadence == null || cadence === 0) return "once";
+  const every = frequency && frequency > 1 ? frequency : 1;
+  if (cadence === 1) return every > 1 ? `every ${every} months` : "monthly";
+  if (cadence === 2) return every > 1 ? `every ${every} weeks` : "weekly";
+  if (cadence === 13) return every > 1 ? `every ${every} years` : "yearly";
+  return `every ${every > 1 ? every : cadence} months`;
+}
+
+/** One-line goal summary, or "" when the category has no goal. */
+export function goalSummary(c: GoalFields): string {
+  if (!c.goal_type) return "";
+  const parts = [`${c.goal_type} ${formatCurrency(c.goal_target ?? 0)} ${describeCadence(c.goal_cadence, c.goal_cadence_frequency)}`];
+  if (c.goal_target_date) parts.push(`due ${c.goal_target_date}`);
+  if (c.goal_under_funded) parts.push(`underfunded ${formatCurrency(c.goal_under_funded)}`);
+  if (c.goal_snoozed_at) parts.push(`snoozed`);
+  return `goal: ${parts.join(", ")}`;
+}
+
+/** Multi-line goal detail for single-category views. */
+export function goalLines(c: GoalFields): string[] {
+  if (!c.goal_type) return [`Goal: None`];
+  return [
+    `Goal Type: ${c.goal_type}`,
+    `Goal Target: ${formatCurrency(c.goal_target ?? 0)}`,
+    `Goal Cadence: ${describeCadence(c.goal_cadence, c.goal_cadence_frequency)}`,
+    `Goal Target Date: ${c.goal_target_date ?? "None"}`,
+    `Goal Behavior: ${c.goal_needs_whole_amount == null ? "n/a" : c.goal_needs_whole_amount ? "set aside another" : "refill up to"}`,
+    `Goal Underfunded This Month: ${formatCurrency(c.goal_under_funded ?? 0)}`,
+    `Goal Overall Left: ${formatCurrency(c.goal_overall_left ?? 0)}`,
+    `Goal Complete: ${c.goal_percentage_complete ?? 0}%`,
+    `Goal Snoozed: ${c.goal_snoozed_at ?? "no"}`,
+    `Goal Created: ${c.goal_creation_month ?? "None"}`,
+  ];
+}
+
 /** Format a date string for display */
 export function formatDate(dateStr: string | null | undefined): string {
   if (!dateStr) return "N/A";

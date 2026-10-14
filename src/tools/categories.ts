@@ -2,7 +2,7 @@ import { z } from "zod";
 import type { CategoryResponse } from "ynab";
 import { McpServer } from "@modelcontextprotocol/server";
 import { getClient, requestUntyped } from "../ynab-client.js";
-import { textResult, errorResult, formatCurrency, dollarsToMilliunits, attributes } from "../utils/formatting.js";
+import { textResult, errorResult, formatCurrency, dollarsToMilliunits, attributes, goalSummary, goalLines } from "../utils/formatting.js";
 
 export function registerCategoryTools(server: McpServer) {
   server.registerTool("list_categories", {
@@ -38,7 +38,8 @@ export function registerCategoryTools(server: McpServer) {
             const budgeted = formatCurrency(cat.budgeted);
             const activity = formatCurrency(cat.activity);
             const balance = formatCurrency(cat.balance);
-            lines.push(`  - ${cat.name}${attributes(cat)}: Budgeted ${budgeted} | Activity ${activity} | Balance ${balance} [ID: ${cat.id}]`);
+            const goal = goalSummary(cat);
+            lines.push(`  - ${cat.name}${attributes(cat)}: Budgeted ${budgeted} | Activity ${activity} | Balance ${balance}${goal ? ` | ${goal}` : ""} [ID: ${cat.id}]`);
           }
         }
       }
@@ -69,10 +70,7 @@ export function registerCategoryTools(server: McpServer) {
         `Budgeted: ${formatCurrency(c.budgeted)}`,
         `Activity: ${formatCurrency(c.activity)}`,
         `Balance: ${formatCurrency(c.balance)}`,
-        `Goal Type: ${c.goal_type ?? "None"}`,
-        `Goal Target: ${c.goal_target != null ? formatCurrency(c.goal_target) : "None"}`,
-        `Goal Target Month: ${c.goal_target_month ?? "None"}`,
-        `Goal Created: ${c.goal_creation_month ?? "None"}`,
+        ...goalLines(c),
         `Note: ${c.note ?? "None"}`,
         `Hidden: ${c.hidden}`,
         `Deleted: ${c.deleted}`,
@@ -189,8 +187,7 @@ export function registerCategoryTools(server: McpServer) {
         `Budgeted: ${formatCurrency(c.budgeted)}`,
         `Activity: ${formatCurrency(c.activity)}`,
         `Balance: ${formatCurrency(c.balance)}`,
-        `Goal Type: ${c.goal_type ?? "None"}`,
-        `Goal Target: ${c.goal_target != null ? formatCurrency(c.goal_target) : "None"}`,
+        ...goalLines(c),
       ];
       if (c.goal_creation_month != null && month < c.goal_creation_month) {
         lines.push(

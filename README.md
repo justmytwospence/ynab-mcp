@@ -27,6 +27,7 @@ at `http://<host>:8000/mcp` (also at `/`), with a health check at `/health`, and
 | `YNAB_API_TOKEN` | (required) | YNAB personal access token |
 | `MCP_TRANSPORT` | `stdio` (`http` in the image) | `stdio` or `http` |
 | `PORT` | `8000` | HTTP port |
+| `AMAZON_ORDERS_URL`, `AMAZON_ORDERS_TOKEN` | (unset) | An amazon-orders service (see the homelab repo); enables `amazon_order` and `amazon_receipts` |
 | `YNAB_MCP_STATE_DIR` | `./state` (`/data` in the image) | Where enrich_transactions remembers item categories; mount a volume |
 | `MCP_ALLOWED_HOSTS` | (any) | Comma-separated hostnames allowed in the `Host` header (set it behind a reverse proxy) |
 

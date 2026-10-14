@@ -232,3 +232,30 @@ test("prorated legs always sum to the charge", () => {
   const legs = prorate(-10_000, new Map([["a", [{ key: "1", name: "1", amount: 1 }]], ["b", [{ key: "2", name: "2", amount: 1 }]], ["c", [{ key: "3", name: "3", amount: 1 }]]]));
   assert.equal(legs.reduce((s, l) => s + l.amount, 0), -10_000);
 });
+
+test("a card's gap fixes are all held back when any one of them cannot be funded", () => {
+  // January: the payment category holds 10 too much; February: 10 too little, and RTA is empty.
+  const snap = snapshot({
+    cells: { "card-pay": { "2026-01-01": { balance: 60_000 }, "2026-02-01": { balance: 50_000 }, "2026-03-01": { balance: 50_000 } } },
+    tbb: [0, 0, 0],
+    transactions: [
+      { id: "t1", date: "2026-01-10", amount: -50_000, account: "card", category: "food" },
+      { id: "t2", date: "2026-02-10", amount: -10_000, account: "card", category: "food" },
+    ],
+  });
+  const model = new BudgetModel(snap, TODAY);
+  const plan = planRepairs(model, findIntegrityProblems(model));
+  assert.equal(plan.repairs.length, 0, "releasing January alone would leave February short");
+  assert.equal(plan.writes.length, 0);
+  assert.ok(plan.unresolved.some((u) => u.kind === "card_gap"));
+});
+
+test("a month where the card is in credit is not judged", () => {
+  const snap = snapshot({
+    cells: { "card-pay": { "2026-01-01": { balance: 5_000 }, "2026-02-01": { balance: 5_000 }, "2026-03-01": { balance: 5_000 } } },
+    tbb: [100_000, 100_000, 100_000],
+    transactions: [{ id: "refund", date: "2026-01-10", amount: 20_000, account: "card", category: "food" }],
+  });
+  const model = new BudgetModel(snap, TODAY);
+  assert.equal(findIntegrityProblems(model).cards[0]!.months.length, 0);
+});

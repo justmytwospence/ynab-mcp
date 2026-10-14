@@ -164,9 +164,11 @@ function cardReport(model: BudgetModel, cardId: string, months: string[]): CardR
   const allMonths = model.months.filter((m) => m <= model.currentMonth);
   let previousGap = 0;
   for (const month of allMonths) {
-    const owedRaw = -(byMonth.get(month) ?? 0);
-    // A card in credit owes nothing, and its payment category cannot hold less than zero.
-    const owed = Math.max(0, owedRaw);
+    const owed = -(byMonth.get(month) ?? 0);
+    // A card in credit (overpaid, or a refund larger than the balance) has no
+    // meaningful target for its payment category: YNAB leaves whatever is there.
+    // Judging it would release money one month only to need it back the next.
+    if (owed < 0) continue;
     const available = model.monthCategory(month, paymentCategoryId)?.balance ?? 0;
     const gap = owed - available;
     const change = gap - previousGap;
@@ -311,6 +313,17 @@ class Simulation {
       if (m >= from) result.push(adjusted);
     }
     return result;
+  }
+
+  snapshot() {
+    return { deltas: new Map(this.deltas), rtaDeltas: new Map(this.rtaDeltas) };
+  }
+
+  restore(state: { deltas: Map<string, number>; rtaDeltas: Map<string, number> }) {
+    this.deltas.clear();
+    for (const [k, v] of state.deltas) this.deltas.set(k, v);
+    this.rtaDeltas.clear();
+    for (const [k, v] of state.rtaDeltas) this.rtaDeltas.set(k, v);
   }
 
   netChanges(): AssignmentChange[] {
@@ -502,6 +515,10 @@ export function planRepairs(model: BudgetModel, findings: Findings, options: Rep
     for (const card of findings.cards) {
       if (card.skipped || !card.paymentCategoryId) continue;
       const label = `${card.card} payment`;
+      // All or nothing per card: gap changes often come in pairs (too much one
+      // month, too little the next), and fixing only one half makes it worse.
+      const checkpoint = { repairs: repairs.length, unresolved: unresolved.length, sim: sim.snapshot() };
+      let blocked = false;
       for (const m of card.months) {
         if (Math.abs(m.change) < SUB_CENT) continue;
         if (m.change < 0) {
@@ -515,11 +532,19 @@ export function planRepairs(model: BudgetModel, findings: Findings, options: Rep
         }
         const funded = fund("card_gap", m.month, card.paymentCategoryId, label, m.change);
         if (m.change - funded >= SUB_CENT) {
+          blocked = true;
           unresolved.push({
             kind: "card_gap", month: m.month, categoryId: card.paymentCategoryId, label, amount: m.change,
             shortBy: m.change - funded, reason: blockedReason(m.month),
           });
         }
+      }
+      if (blocked) {
+        const kept = unresolved.slice(checkpoint.unresolved);
+        repairs.length = checkpoint.repairs;
+        unresolved.length = checkpoint.unresolved;
+        sim.restore(checkpoint.sim);
+        for (const u of kept) unresolved.push({ ...u, reason: `${u.reason}; ${card.card}'s other gap fixes are held back with it` });
       }
     }
   }

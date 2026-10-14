@@ -156,6 +156,16 @@ export function textResult(text: string) {
   return { content: [{ type: "text" as const, text: text + rateLimitFooter() }] };
 }
 
+/**
+ * A machine-readable result for automation (n8n parses the text as JSON), so
+ * the rate-limit warning travels inside the object instead of after it.
+ */
+export function jsonResult(value: object) {
+  const usage = apiUsageTracker.getUsage();
+  const body = { ...value, api_calls_remaining: usage.remaining };
+  return { content: [{ type: "text" as const, text: JSON.stringify(body) }] };
+}
+
 /** Build an error response for MCP tool results */
 export function errorResult(error: unknown) {
   return {

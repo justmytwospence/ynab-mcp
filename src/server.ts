@@ -14,6 +14,7 @@ import { registerWorkflowTools } from "./workflows/merge-category.js";
 import { registerDeleteCategoryTool } from "./workflows/delete-category.js";
 import { registerCreditCardAuditTools } from "./workflows/audit-credit-card-payments.js";
 import { registerAccountReconciliationAuditTool } from "./workflows/audit-account-reconciliation.js";
+import { registerStewardTools } from "./workflows/steward.js";
 import { registerApiUsageTools } from "./tools/api-usage.js";
 import { registerResources } from "./resources.js";
 import { registerPrompts } from "./prompts.js";
@@ -55,6 +56,7 @@ export function createServer(): McpServer {
   registerDeleteCategoryTool(server);
   registerCreditCardAuditTools(server);
   registerAccountReconciliationAuditTool(server);
+  registerStewardTools(server);
   registerApiUsageTools(server);
   registerResources(server);
   registerPrompts(server);

@@ -177,7 +177,12 @@ export async function getBudgetSnapshot(
   }
 
   try {
-    const response = await getClient().plans.getPlanById(budgetId);
+    const response = await withRetryOn500(
+      () => getClient().plans.getPlanById(budgetId),
+      () => {
+        apiCalls += 1;
+      }
+    );
     apiCalls += 1;
     const snapshot: BudgetSnapshot = {
       budgetId: response.data.plan.id,
@@ -289,6 +294,31 @@ async function assemblePiecewise(budgetId: string): Promise<{ snapshot: BudgetSn
     },
     apiCalls,
   };
+}
+
+/**
+ * Retry a full export that failed with a 500.
+ *
+ * Observed live: the first full export of a large budget fails with a bare
+ * internal_server_error, and the identical request succeeds seconds later
+ * (YNAB appears to warm something). A 503 is a timeout and handled by the
+ * piecewise fallback instead; anything else propagates.
+ */
+export async function withRetryOn500<T>(
+  request: () => Promise<T>,
+  onFailedAttempt: () => void,
+  attempts = 3,
+  delayMs = 2000
+): Promise<T> {
+  for (let attempt = 1; ; attempt++) {
+    try {
+      return await request();
+    } catch (e: unknown) {
+      if (errorStatus(e) !== 500 || attempt >= attempts) throw e;
+      onFailedAttempt();
+      await new Promise((resolve) => setTimeout(resolve, delayMs * attempt));
+    }
+  }
 }
 
 /** [since, until] date pairs covering firstMonth through today, a year at a time. */

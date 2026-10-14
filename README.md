@@ -27,6 +27,7 @@ at `http://<host>:8000/mcp` (also at `/`), with a health check at `/health`, and
 | `YNAB_API_TOKEN` | (required) | YNAB personal access token |
 | `MCP_TRANSPORT` | `stdio` (`http` in the image) | `stdio` or `http` |
 | `PORT` | `8000` | HTTP port |
+| `YNAB_MCP_STATE_DIR` | `./state` (`/data` in the image) | Where enrich_transactions remembers item categories; mount a volume |
 | `MCP_ALLOWED_HOSTS` | (any) | Comma-separated hostnames allowed in the `Host` header (set it behind a reverse proxy) |
 
 Running as a long-lived service also keeps the rate-limit accounting and the `get_budget`
@@ -204,7 +205,10 @@ Each tool's description includes its API call cost in brackets (e.g. `[1 API cal
 | `plan_month` | Budget a month: Variable Costs get last month's spending, Fixed Costs goals get funded; flags charges without goals, goals without charges and price changes (1 API call to plan) |
 | `suggest_categories` | Suggest categories for uncategorized and unapproved transactions from your history (payee + amount, then payee); bulk-apply the obvious ones (1 API call to suggest) |
 
-All three read the cached export and accept `format: "json"` for automation.
+| `enrich_transactions` | Match Apple/Amazon receipts to transactions, write the product names into the memo, categorize or split by remembered item categories (1 API call to plan) |
+| `list_item_categories` | The item -> category mappings learned so far (0 API calls) |
+
+These read the cached export and accept `format: "json"` for automation.
 
 ## Resources
 

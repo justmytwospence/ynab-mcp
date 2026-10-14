@@ -12,11 +12,14 @@ RUN npm run build && npm prune --omit=dev
 FROM node:24-alpine
 ENV NODE_ENV=production \
     MCP_TRANSPORT=http \
-    PORT=8000
+    PORT=8000 \
+    YNAB_MCP_STATE_DIR=/data
 WORKDIR /app
 COPY --from=build /app/package.json ./
 COPY --from=build /app/node_modules ./node_modules
 COPY --from=build /app/dist ./dist
+RUN mkdir -p /data && chown node:node /data
+VOLUME /data
 USER node
 EXPOSE 8000
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --start-interval=2s --retries=3 \

@@ -3,3 +3,4 @@ dist/
 *.tgz
 .mcp.json
 .claude/
+state/

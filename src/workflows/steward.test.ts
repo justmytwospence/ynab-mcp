@@ -182,3 +182,53 @@ test("plan_month: variable costs get last month's spending, fixed goals get fund
   assert.deepEqual(plan.flags.map((f) => [f.categoryId, f.issue]), [["gym", "no_goal"]]);
   assert.equal(plan.affordable, true);
 });
+
+import { ItemStore } from "./lib/item-store.js";
+import { planEnrichment, prorate } from "./lib/enrich.js";
+
+function enrichModel() {
+  const snap = snapshot({
+    cells: { groceries: {}, household: {} },
+    tbb: [0, 0, 0],
+    transactions: [
+      { id: "amz", date: "2026-03-04", amount: -32_400, account: "card", category: "household", payee: "p-amazon" },
+      { id: "apl", date: "2026-03-05", amount: -990, account: "card", category: null, payee: "p-apple" },
+    ],
+  });
+  (snap.plan.payees as { id: string; name: string; deleted: boolean }[]).push({ id: "p-amazon", name: "Amazon", deleted: false });
+  return new BudgetModel(snap, TODAY);
+}
+
+test("a receipt whose items span categories splits the charge by price, tax included", () => {
+  const store = new ItemStore(null);
+  store.setCategory("amazon", "B1", "Coffee", "groceries");
+  store.setCategory("amazon", "B2", "Batteries", "household");
+  const plan = planEnrichment(enrichModel(), store, [{
+    id: "o1", source: "amazon", date: "2026-03-02", total: 32_400,
+    items: [{ key: "B1", name: "Coffee", amount: 20_000 }, { key: "B2", name: "Batteries", amount: 10_000 }],
+  }]);
+  const u = plan.updates[0]!;
+  assert.equal(u.transactionId, "amz");
+  assert.equal(u.memo, "Amazon: Coffee; Batteries");
+  assert.deepEqual(u.subtransactions!.map((s) => [s.category_id, s.amount]), [["groceries", -21_600], ["household", -10_800]]);
+});
+
+test("an unknown item only sets the memo and is reported", () => {
+  const plan = planEnrichment(enrichModel(), new ItemStore(null), [{
+    id: "a1", source: "apple", date: "2026-03-05", total: 990, items: [{ key: "iCloud+ 50 GB", name: "iCloud+ 50 GB", amount: 990 }],
+  }]);
+  assert.equal(plan.updates[0]!.memo, "iCloud+ 50 GB");
+  assert.equal(plan.updates[0]!.pending, true);
+  assert.equal(plan.updates[0]!.categoryId, undefined);
+  assert.deepEqual(plan.unknownItems.map((i) => i.key), ["iCloud+ 50 GB"]);
+});
+
+test("a receipt with no matching amount is unmatched", () => {
+  const plan = planEnrichment(enrichModel(), new ItemStore(null), [{ id: "x", source: "amazon", date: "2026-03-04", total: 1_000, items: [] }]);
+  assert.equal(plan.unmatched.length, 1);
+});
+
+test("prorated legs always sum to the charge", () => {
+  const legs = prorate(-10_000, new Map([["a", [{ key: "1", name: "1", amount: 1 }]], ["b", [{ key: "2", name: "2", amount: 1 }]], ["c", [{ key: "3", name: "3", amount: 1 }]]]));
+  assert.equal(legs.reduce((s, l) => s + l.amount, 0), -10_000);
+});

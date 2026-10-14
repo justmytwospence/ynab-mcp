@@ -8,6 +8,8 @@ import { BudgetModel } from "./lib/budget-model.js";
 import { findIntegrityProblems, planRepairs, type Findings, type RepairPlan, type Repair } from "./lib/integrity.js";
 import { planMonth, type MonthPlan } from "./lib/month-plan.js";
 import { suggestCategories, type Suggestion } from "./lib/categorize.js";
+import { planEnrichment, type EnrichPlan } from "./lib/enrich.js";
+import { ItemStore } from "./lib/item-store.js";
 
 const budgetId = z.string().default("last-used").describe("Budget ID or 'last-used'");
 const format = z.enum(["text", "json"]).default("text").describe("text for people, json for automation");
@@ -178,6 +180,111 @@ export function registerStewardTools(server: McpServer) {
       return errorResult(e);
     }
   });
+
+  server.registerTool("enrich_transactions", {
+    title: "Enrich Transactions From Receipts",
+    description:
+      "[1 API call to plan, +1 per split, +1 for the rest] [Workflow] Matches receipts (Apple email receipts, Amazon " +
+      "payments with their order items) to YNAB transactions by payee, exact amount and date (+/- date_slack_days), " +
+      "and writes the real product names into the memo. Items with a remembered category categorize the " +
+      "transaction; items in several categories split it, sharing the charge (tax included) by item price. Nothing " +
+      "is split until every item has a category, since a split cannot be edited through the API. Unknown items are " +
+      "returned with the category list; teach them with `assign` (remembered for next time). Amounts in receipts " +
+      "are dollars.",
+    inputSchema: z.object({
+      budget_id: budgetId,
+      receipts: z.array(z.object({
+        id: z.string().describe("Stable receipt id: Apple order id, Amazon order number + charge date"),
+        source: z.string().describe("'apple' or 'amazon' (selects the payee pattern), or a payee name"),
+        date: z.string().describe("Charge date YYYY-MM-DD"),
+        total: z.number().describe("Amount charged in dollars; negative for a refund"),
+        items: z.array(z.object({
+          key: z.string().describe("Stable item identity: ASIN, product name"),
+          name: z.string(),
+          amount: z.number().default(0).describe("Item price in dollars (tax may be excluded)"),
+        })).default([]),
+      })).default([]),
+      assign: z.array(z.object({
+        source: z.string(),
+        key: z.string(),
+        name: z.string().default(""),
+        category_id: z.string(),
+      })).default([]).describe("Remember these item -> category mappings before planning"),
+      date_slack_days: z.number().int().default(7),
+      apply: z.boolean().default(false),
+      format,
+    }),
+    annotations: { readOnlyHint: false, destructiveHint: false },
+  }, async (args) => {
+    try {
+      const { snapshot, apiCalls } = await getBudgetSnapshot(args.budget_id);
+      const model = new BudgetModel(snapshot);
+      const store = ItemStore.open();
+      for (const a of args.assign) {
+        if (!model.categories.has(a.category_id)) throw new Error(`Unknown category ${a.category_id} for ${a.source}:${a.key}`);
+        store.setCategory(a.source, a.key, a.name || a.key, a.category_id);
+      }
+      if (args.assign.length > 0) store.save();
+      const receipts = args.receipts.map((r) => ({
+        ...r,
+        total: Math.round(r.total * 1000),
+        items: r.items.map((i) => ({ ...i, amount: Math.round(i.amount * 1000) })),
+      }));
+      const plan = planEnrichment(model, store, receipts, { dateSlackDays: args.date_slack_days });
+      let calls = apiCalls;
+      const applied = { updated: 0, split: 0, failed: [] as string[] };
+      if (args.apply && plan.updates.length > 0) {
+        const client = getClient();
+        const plain = plan.updates.filter((u) => !u.subtransactions);
+        if (plain.length > 0) {
+          try {
+            await client.transactions.updateTransactions(snapshot.budgetId, {
+              transactions: plain.map((u) => ({ id: u.transactionId, memo: u.memo, ...(u.categoryId ? { category_id: u.categoryId } : {}) })),
+            });
+            applied.updated += plain.length;
+            for (const u of plain) if (!u.pending && u.categoryId) store.markEnriched(u.transactionId, u.receiptId);
+          } catch (e) {
+            applied.failed.push(`bulk update: ${describeError(e)}`);
+          }
+          calls += 1;
+        }
+        for (const u of plan.updates.filter((x) => x.subtransactions)) {
+          try {
+            await client.transactions.updateTransaction(snapshot.budgetId, u.transactionId, {
+              transaction: { memo: u.memo, subtransactions: u.subtransactions },
+            });
+            applied.split += 1;
+            store.markEnriched(u.transactionId, u.receiptId);
+          } catch (e) {
+            applied.failed.push(`split ${u.transactionId}: ${describeError(e)}`);
+          }
+          calls += 1;
+        }
+        store.save();
+        invalidateBudgetSnapshot(args.budget_id);
+      }
+      const categories = plan.unknownItems.length > 0
+        ? Array.from(model.categories.values())
+            .filter((c) => !c.hidden && !model.internalIds.has(c.id))
+            .map((c) => ({ id: c.id, label: model.categoryLabel(c.id) }))
+        : [];
+      const result = { plan, applied: args.apply ? applied : null, categories, api_calls: calls };
+      if (args.format === "json") return jsonResult(result);
+      return textResult(renderEnrich(plan, args.apply ? applied : null, model, calls));
+    } catch (e) {
+      return errorResult(e);
+    }
+  });
+
+  server.registerTool("list_item_categories", {
+    title: "List Remembered Item Categories",
+    description: "[0 API calls] The item -> category mappings enrich_transactions has learned.",
+    inputSchema: z.object({}),
+    annotations: { readOnlyHint: true },
+  }, async () => {
+    const items = ItemStore.open().list();
+    return textResult(items.length === 0 ? "No item mappings yet." : items.map((i) => `${i.key} (${i.name}) -> ${i.categoryId}`).join("\n"));
+  });
 }
 
 function nextMonth(month: string): string {
@@ -338,6 +445,27 @@ function renderSuggestions(suggestions: Suggestion[], applied: { updated: number
     }
   }
   if (applied) lines.push(``, applied.error ? `Apply failed: ${applied.error}` : `Updated ${applied.updated} transaction(s).`);
+  lines.push(`API calls used: ${calls}`);
+  return lines.join("\n");
+}
+
+function renderEnrich(plan: EnrichPlan, applied: { updated: number; split: number; failed: string[] } | null, model: BudgetModel, calls: number): string {
+  const lines = [`Matched ${plan.updates.length} receipt(s); ${plan.alreadyDone} already done; ${plan.unmatched.length} unmatched.`];
+  for (const u of plan.updates) {
+    const what = u.subtransactions
+      ? `split ${u.subtransactions.map((s) => `${model.categoryLabel(s.category_id)} ${money(s.amount)}`).join(", ")}`
+      : u.categoryId ? `-> ${model.categoryLabel(u.categoryId)}` : u.pending ? "(memo only: items need categories)" : "(memo only)";
+    lines.push(`  ${u.date} ${u.payee} ${money(u.amount)}: "${u.memo}" ${what}`);
+  }
+  if (plan.unknownItems.length > 0) {
+    lines.push(``, `Items without a category (teach with assign):`);
+    for (const i of plan.unknownItems) lines.push(`  ${i.source}:${i.key} "${i.name}"`);
+  }
+  for (const u of plan.unmatched) lines.push(`  unmatched ${u.source} ${u.date} ${money(u.total)} (${u.receiptId}): ${u.reason}`);
+  if (applied) {
+    lines.push(``, `Updated ${applied.updated}, split ${applied.split}.`);
+    for (const f of applied.failed) lines.push(`  failed: ${f}`);
+  }
   lines.push(`API calls used: ${calls}`);
   return lines.join("\n");
 }

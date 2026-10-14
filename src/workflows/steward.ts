@@ -209,7 +209,7 @@ export function registerStewardTools(server: McpServer) {
         key: z.string(),
         name: z.string().default(""),
         category_id: z.string(),
-      })).default([]).describe("Remember these item -> category mappings before planning"),
+      })).default([]).describe("Item -> category mappings to plan with; remembered only when apply=true"),
       date_slack_days: z.number().int().default(7),
       apply: z.boolean().default(false),
       format,
@@ -224,7 +224,8 @@ export function registerStewardTools(server: McpServer) {
         if (!model.categories.has(a.category_id)) throw new Error(`Unknown category ${a.category_id} for ${a.source}:${a.key}`);
         store.setCategory(a.source, a.key, a.name || a.key, a.category_id);
       }
-      if (args.assign.length > 0) store.save();
+      // A dry run plans with the new mappings but does not remember them.
+      if (args.assign.length > 0 && args.apply) store.save();
       const receipts = args.receipts.map((r) => ({
         ...r,
         total: Math.round(r.total * 1000),

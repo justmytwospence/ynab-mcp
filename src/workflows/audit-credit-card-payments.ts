@@ -14,6 +14,9 @@ import { describeError } from "../utils/errors.js";
 
 const CREDIT_ACCOUNT_TYPES = new Set(["creditCard", "lineOfCredit"]);
 
+/** Differences smaller than one cent (10 milliunits) are rounding, not missing transactions. */
+export const SUB_CENT = 10;
+
 /**
  * What the audit checks.
  *
@@ -150,7 +153,10 @@ export function registerCreditCardAuditTools(server: McpServer) {
         if (card.debt_original_balance != null && card.debt_original_balance !== 0) {
           lines.push(`  Pre-YNAB debt (debt_original_balance): ${formatCurrency(card.debt_original_balance)}`);
         }
-        if (walk.unreconciled !== 0) {
+        // YNAB rounds an account's balance to the cent, but an imported foreign-currency
+        // transaction can carry sub-cent milliunits (e.g. 8539), so a sum can differ
+        // from the balance by a few milliunits without anything missing.
+        if (Math.abs(walk.unreconciled) >= SUB_CENT) {
           // The forward walk is self-validating: summing every transaction must
           // reproduce the account's working balance. If it does not, the
           // transaction set is incomplete and no reconstructed month-end

@@ -142,7 +142,7 @@ Each tool's description includes its API call cost in brackets (e.g. `[1 API cal
 | `get_transaction` | Get details for a single transaction |
 | `create_transaction` | Create a new transaction |
 | `create_transactions` | Batch create multiple transactions |
-| `update_transaction` | Update an existing transaction |
+| `update_transaction` | Update an existing transaction, or split a non-split one (`subtransactions`) |
 | `update_transactions` | Bulk update multiple transactions |
 | `delete_transaction` | Delete a transaction |
 | `import_transactions` | Import from linked financial institutions |
@@ -168,6 +168,7 @@ Each tool's description includes its API call cost in brackets (e.g. `[1 API cal
 | `list_payees` | List all payees |
 | `get_payee` | Get details for a single payee |
 | `update_payee` | Update a payee's name |
+| `create_payee` | Create a payee |
 
 ### Payee Locations
 

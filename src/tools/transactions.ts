@@ -221,12 +221,22 @@ export function registerTransactionTools(server: McpServer) {
       cleared: z.enum(CLEARED_VALUES).optional().describe("New cleared status"),
       approved: z.boolean().optional().describe("New approval status"),
       flag_color: z.enum(FLAG_COLORS).optional().describe("New flag color"),
+      subtransactions: z.array(z.object({
+        amount: z.number().describe("Leg amount in dollars (negative for outflow); legs must sum to the transaction amount"),
+        category_id: z.string().optional(),
+        payee_id: z.string().optional(),
+        memo: z.string().optional(),
+      })).optional().describe("Turn a non-split transaction into a split. Once split, the API cannot change the legs; the YNAB app can."),
     }),
     annotations: { readOnlyHint: false },
   }, async ({ budget_id, transaction_id, ...fields }) => {
     try {
       const data: any = { ...fields };
       if (data.amount != null) data.amount = dollarsToMilliunits(data.amount);
+      if (data.subtransactions) {
+        data.subtransactions = data.subtransactions.map((s: any) => ({ ...s, amount: dollarsToMilliunits(s.amount) }));
+        delete data.category_id;
+      }
       if (data.flag_color !== undefined) data.flag_color = data.flag_color ?? null;
       const response = await getClient().transactions.updateTransaction(budget_id, transaction_id, {
         transaction: data,

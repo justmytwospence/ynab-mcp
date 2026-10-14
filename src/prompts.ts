@@ -23,7 +23,7 @@ export function registerPrompts(server: McpServer) {
             "2. Identify any overspent categories (negative balance) and list them with amounts.",
             "3. Compare budgeted vs. activity for each category to find the biggest spending variances.",
             "4. Check for categories with goals that are underfunded.",
-            "5. Run audit_credit_card_payments for this month to check for unexplained payment category drift.",
+            "5. Run audit_budget_integrity to check for overspent past months and card payment categories that differ from what the card owes.",
             "6. Summarize findings with actionable recommendations.",
             "",
             "Present results in clear sections with currency amounts formatted for readability.",

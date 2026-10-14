@@ -95,4 +95,22 @@ export function registerPayeeTools(server: McpServer) {
       return errorResult(e);
     }
   });
+
+  server.registerTool("create_payee", {
+    title: "Create Payee",
+    description: "[1 API call] Create a payee (e.g. before scheduling transactions to a new merchant)",
+    inputSchema: z.object({
+      budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
+      name: z.string().max(500).describe("Payee name (max 500 characters)"),
+    }),
+    annotations: { readOnlyHint: false },
+  }, async ({ budget_id, name }) => {
+    try {
+      const response = await getClient().payees.createPayee(budget_id, { payee: { name } });
+      const p = response.data.payee;
+      return textResult(`Created payee "${p.name}"\nID: ${p.id}`);
+    } catch (e: any) {
+      return errorResult(e);
+    }
+  });
 }

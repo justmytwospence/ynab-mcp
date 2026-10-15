@@ -1,12 +1,16 @@
 import { api, Configuration, MoneyMovementsApi } from "ynab";
 import { apiUsageTracker } from "./utils/api-usage.js";
+import { withAiFlag } from "./utils/ai-flag.js";
+
+// Every request: rate-limit accounting, plus the AI flag on transaction writes.
+const trackedFetch = withAiFlag(apiUsageTracker.wrappedFetch);
 
 class TrackedApi extends api {
   constructor(accessToken: string) {
     super(accessToken);
     this._configuration = new Configuration({
       accessToken,
-      fetchApi: apiUsageTracker.wrappedFetch,
+      fetchApi: trackedFetch,
     });
   }
 }
@@ -37,7 +41,7 @@ export function getMoneyMovementsClient(): MoneyMovementsApi {
     moneyMovementsApi = new MoneyMovementsApi(
       new Configuration({
         accessToken: getToken(),
-        fetchApi: apiUsageTracker.wrappedFetch,
+        fetchApi: trackedFetch,
       })
     );
   }
@@ -61,7 +65,7 @@ export async function requestUntyped<T>(
   path: string,
   body: unknown
 ): Promise<T> {
-  const response = await apiUsageTracker.wrappedFetch(`https://api.ynab.com/v1${path}`, {
+  const response = await trackedFetch(`https://api.ynab.com/v1${path}`, {
     method,
     headers: {
       Authorization: `Bearer ${getToken()}`,

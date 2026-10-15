@@ -28,6 +28,7 @@ at `http://<host>:8000/mcp` (also at `/`), with a health check at `/health`, and
 | `MCP_TRANSPORT` | `stdio` (`http` in the image) | `stdio` or `http` |
 | `PORT` | `8000` | HTTP port |
 | `AMAZON_ORDERS_URL`, `AMAZON_ORDERS_TOKEN` | (unset) | An amazon-orders service (see the homelab repo); enables `amazon_order` and `amazon_receipts` |
+| `YNAB_MCP_AI_FLAG` | (unset: off) | A flag color (`purple`, ...) put on every transaction this server creates or edits; see "AI flag" |
 | `YNAB_MCP_STATE_DIR` | `./state` (`/data` in the image) | Where enrich_transactions remembers item categories; mount a volume |
 | `MCP_ALLOWED_HOSTS` | (any) | Comma-separated hostnames allowed in the `Host` header (set it behind a reverse proxy) |
 
@@ -87,6 +88,20 @@ Add to your `claude_desktop_config.json`:
 ## Tools
 
 49 tools covering the full YNAB API. All monetary amounts use YNAB's milliunits format (e.g., `$12.34` = `12340`).
+
+### AI flag
+
+Set `YNAB_MCP_AI_FLAG=purple` (any YNAB flag color) and every transaction the server creates
+or meaningfully edits gets that flag, so you can see and filter what an AI touched. In YNAB,
+name the flag (e.g. "AI") and filter by it; through the server, pass `flag: "ai"` to any
+`list_*transactions` tool.
+
+- Marked: creates, and updates to account, date, amount, payee, category, memo or splits,
+  from any tool or workflow. Not marked: cleared/approved/reconciled changes, bank imports,
+  scheduled transactions.
+- A flag you set yourself is never replaced, and a `flag_color` the caller passes wins.
+- Marking an update costs one extra API call per write (a follow-up bulk request for the
+  transactions that came back unflagged); creates carry the flag in the request.
 
 ### Rate limit awareness
 

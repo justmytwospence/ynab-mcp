@@ -2,10 +2,10 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/server";
 import { getClient } from "../ynab-client.js";
 import { textResult, errorResult, formatCurrency, dollarsToMilliunits } from "../utils/formatting.js";
+import { FLAG_COLORS, aiFlagColor } from "../utils/ai-flag.js";
 import type { TransactionDetail, HybridTransaction } from "ynab";
 
 const CLEARED_VALUES = ["cleared", "uncleared", "reconciled"] as const;
-const FLAG_COLORS = ["red", "orange", "yellow", "green", "blue", "purple"] as const;
 const TRANSACTION_TYPES = ["uncategorized", "unapproved"] as const;
 
 const CLEARED_FILTER_DESC =
@@ -13,6 +13,28 @@ const CLEARED_FILTER_DESC =
   "or 'unreconciled' (alias for cleared OR uncleared — useful for reconciliation workflows).";
 const CLEARED_FILTER_VALUES = ["reconciled", "cleared", "uncleared", "unreconciled"] as const;
 type ClearedFilter = typeof CLEARED_FILTER_VALUES[number];
+
+const FLAG_FILTER_VALUES = [...FLAG_COLORS, "ai", "any", "none"] as const;
+type FlagFilter = typeof FLAG_FILTER_VALUES[number];
+const FLAG_FILTER_DESC =
+  "Client-side filter on flag. A color, 'any' (flagged), 'none' (unflagged), or 'ai': the flag this server " +
+  "puts on every transaction it creates or edits (YNAB_MCP_AI_FLAG), i.e. what an AI touched.";
+
+function matchesFlagFilter(txn: TransactionDetail | HybridTransaction, filter: FlagFilter | undefined): boolean {
+  if (!filter) return true;
+  if (filter === "any") return !!txn.flag_color;
+  if (filter === "none") return !txn.flag_color;
+  if (filter === "ai") {
+    const ai = aiFlagColor();
+    return ai !== null && txn.flag_color === ai;
+  }
+  return txn.flag_color === filter;
+}
+
+function filterNote(cleared: string | undefined, flag: string | undefined, kept: number, total: number): string {
+  const parts = [cleared && `cleared=${cleared}`, flag && `flag=${flag}`].filter(Boolean);
+  return parts.length ? ` (filtered to ${parts.join(", ")}, ${kept} of ${total})` : "";
+}
 
 function matchesClearedFilter(
   txn: TransactionDetail | HybridTransaction,
@@ -25,7 +47,7 @@ function matchesClearedFilter(
 
 function formatTransaction(t: TransactionDetail | HybridTransaction): string {
   const status = `${t.cleared}+${t.approved ? "approved" : "unapproved"}`;
-  const flag = t.flag_color ? ` [${t.flag_color}]` : "";
+  const flag = t.flag_color ? ` [${t.flag_name ? `${t.flag_color}: ${t.flag_name}` : t.flag_color}]` : "";
   return `- ${t.date} | ${formatCurrency(t.amount)} | ${t.payee_name ?? "No payee"} | ${t.category_name ?? "Uncategorized"} | ${t.account_name} [${status}]${flag} ${t.memo ? `"${t.memo}"` : ""} [ID: ${t.id}]`;
 }
 
@@ -41,10 +63,11 @@ export function registerTransactionTools(server: McpServer) {
       until_date: z.string().optional().describe("Only return transactions on or before this date (YYYY-MM-DD)"),
       type: z.enum(TRANSACTION_TYPES).optional().describe("Filter by 'uncategorized' or 'unapproved'"),
       cleared: z.enum(CLEARED_FILTER_VALUES).optional().describe(CLEARED_FILTER_DESC),
+      flag: z.enum(FLAG_FILTER_VALUES).optional().describe(FLAG_FILTER_DESC),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
     }),
     annotations: { readOnlyHint: true },
-  }, async ({ budget_id, since_date, until_date, type, cleared, last_knowledge_of_server }) => {
+  }, async ({ budget_id, since_date, until_date, type, cleared, flag, last_knowledge_of_server }) => {
     try {
       const response = await getClient().transactions.getTransactionsRaw({
         planId: budget_id,
@@ -54,12 +77,12 @@ export function registerTransactionTools(server: McpServer) {
         lastKnowledgeOfServer: last_knowledge_of_server,
       }).then((r) => r.value());
       const allTxns = response.data.transactions;
-      const txns = allTxns.filter((t) => matchesClearedFilter(t, cleared));
+      const txns = allTxns.filter((t) => matchesClearedFilter(t, cleared) && matchesFlagFilter(t, flag));
       if (txns.length === 0) return textResult("No transactions found.");
       const lines = txns.map(formatTransaction);
-      const filterNote = cleared ? ` (filtered to cleared=${cleared}, ${txns.length} of ${allTxns.length})` : "";
+      const note = filterNote(cleared, flag, txns.length, allTxns.length);
       return textResult(
-        `Transactions (${txns.length})${filterNote}:\n${lines.join("\n")}\n\nServer Knowledge: ${response.data.server_knowledge}`
+        `Transactions (${txns.length})${note}:\n${lines.join("\n")}\n\nServer Knowledge: ${response.data.server_knowledge}`
       );
     } catch (e: any) {
       return errorResult(e);
@@ -207,7 +230,7 @@ export function registerTransactionTools(server: McpServer) {
 
   server.registerTool("update_transaction", {
     title: "Update Transaction",
-    description: "[1 API call] Update an existing transaction. " + "Credit Card Payment categories are NOT permitted here and are silently IGNORED rather than rejected, so assigning one reports success and changes nothing. Use update_month_category to assign money to a Credit Card Payment category.",
+    description: "[1 API call, +1 if it gets the AI flag] Update an existing transaction. " + "Credit Card Payment categories are NOT permitted here and are silently IGNORED rather than rejected, so assigning one reports success and changes nothing. Use update_month_category to assign money to a Credit Card Payment category.",
     inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       transaction_id: z.string().describe("The transaction ID to update"),
@@ -252,7 +275,7 @@ export function registerTransactionTools(server: McpServer) {
 
   server.registerTool("update_transactions", {
     title: "Bulk Update Transactions",
-    description: "[1 API call, bulk] Update multiple transactions at once. Each must include either id or import_id to identify the transaction. " +
+    description: "[1 API call, bulk, +1 if any get the AI flag] Update multiple transactions at once. Each must include either id or import_id to identify the transaction. " +
       "Credit Card Payment categories are NOT permitted here and are silently IGNORED rather than rejected, so assigning one reports success and changes nothing. Use update_month_category to assign money to a Credit Card Payment category.",
     inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
@@ -343,10 +366,11 @@ export function registerTransactionTools(server: McpServer) {
       until_date: z.string().optional().describe("Only return transactions on or before this date (YYYY-MM-DD)"),
       type: z.enum(TRANSACTION_TYPES).optional().describe("Filter by type"),
       cleared: z.enum(CLEARED_FILTER_VALUES).optional().describe(CLEARED_FILTER_DESC),
+      flag: z.enum(FLAG_FILTER_VALUES).optional().describe(FLAG_FILTER_DESC),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
     }),
     annotations: { readOnlyHint: true },
-  }, async ({ budget_id, account_id, since_date, until_date, type, cleared, last_knowledge_of_server }) => {
+  }, async ({ budget_id, account_id, since_date, until_date, type, cleared, flag, last_knowledge_of_server }) => {
     try {
       const response = await getClient().transactions.getTransactionsByAccountRaw({
         planId: budget_id,
@@ -357,11 +381,11 @@ export function registerTransactionTools(server: McpServer) {
         lastKnowledgeOfServer: last_knowledge_of_server,
       }).then((r) => r.value());
       const allTxns = response.data.transactions;
-      const txns = allTxns.filter((t) => matchesClearedFilter(t, cleared));
+      const txns = allTxns.filter((t) => matchesClearedFilter(t, cleared) && matchesFlagFilter(t, flag));
       if (txns.length === 0) return textResult("No transactions found for this account.");
       const lines = txns.map(formatTransaction);
-      const filterNote = cleared ? ` (filtered to cleared=${cleared}, ${txns.length} of ${allTxns.length})` : "";
-      return textResult(`Account Transactions (${txns.length})${filterNote}:\n${lines.join("\n")}`);
+      const note = filterNote(cleared, flag, txns.length, allTxns.length);
+      return textResult(`Account Transactions (${txns.length})${note}:\n${lines.join("\n")}`);
     } catch (e: any) {
       return errorResult(e);
     }
@@ -377,10 +401,11 @@ export function registerTransactionTools(server: McpServer) {
       until_date: z.string().optional().describe("Only return transactions on or before this date (YYYY-MM-DD)"),
       type: z.enum(TRANSACTION_TYPES).optional().describe("Filter by type"),
       cleared: z.enum(CLEARED_FILTER_VALUES).optional().describe(CLEARED_FILTER_DESC),
+      flag: z.enum(FLAG_FILTER_VALUES).optional().describe(FLAG_FILTER_DESC),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
     }),
     annotations: { readOnlyHint: true },
-  }, async ({ budget_id, category_id, since_date, until_date, type, cleared, last_knowledge_of_server }) => {
+  }, async ({ budget_id, category_id, since_date, until_date, type, cleared, flag, last_knowledge_of_server }) => {
     try {
       const response = await getClient().transactions.getTransactionsByCategoryRaw({
         planId: budget_id,
@@ -391,11 +416,11 @@ export function registerTransactionTools(server: McpServer) {
         lastKnowledgeOfServer: last_knowledge_of_server,
       }).then((r) => r.value());
       const allTxns = response.data.transactions;
-      const txns = allTxns.filter((t) => matchesClearedFilter(t, cleared));
+      const txns = allTxns.filter((t) => matchesClearedFilter(t, cleared) && matchesFlagFilter(t, flag));
       if (txns.length === 0) return textResult("No transactions found for this category.");
       const lines = txns.map(formatTransaction);
-      const filterNote = cleared ? ` (filtered to cleared=${cleared}, ${txns.length} of ${allTxns.length})` : "";
-      return textResult(`Category Transactions (${txns.length})${filterNote}:\n${lines.join("\n")}`);
+      const note = filterNote(cleared, flag, txns.length, allTxns.length);
+      return textResult(`Category Transactions (${txns.length})${note}:\n${lines.join("\n")}`);
     } catch (e: any) {
       return errorResult(e);
     }
@@ -411,10 +436,11 @@ export function registerTransactionTools(server: McpServer) {
       until_date: z.string().optional().describe("Only return transactions on or before this date (YYYY-MM-DD)"),
       type: z.enum(TRANSACTION_TYPES).optional().describe("Filter by type"),
       cleared: z.enum(CLEARED_FILTER_VALUES).optional().describe(CLEARED_FILTER_DESC),
+      flag: z.enum(FLAG_FILTER_VALUES).optional().describe(FLAG_FILTER_DESC),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
     }),
     annotations: { readOnlyHint: true },
-  }, async ({ budget_id, payee_id, since_date, until_date, type, cleared, last_knowledge_of_server }) => {
+  }, async ({ budget_id, payee_id, since_date, until_date, type, cleared, flag, last_knowledge_of_server }) => {
     try {
       const response = await getClient().transactions.getTransactionsByPayeeRaw({
         planId: budget_id,
@@ -425,11 +451,11 @@ export function registerTransactionTools(server: McpServer) {
         lastKnowledgeOfServer: last_knowledge_of_server,
       }).then((r) => r.value());
       const allTxns = response.data.transactions;
-      const txns = allTxns.filter((t) => matchesClearedFilter(t, cleared));
+      const txns = allTxns.filter((t) => matchesClearedFilter(t, cleared) && matchesFlagFilter(t, flag));
       if (txns.length === 0) return textResult("No transactions found for this payee.");
       const lines = txns.map(formatTransaction);
-      const filterNote = cleared ? ` (filtered to cleared=${cleared}, ${txns.length} of ${allTxns.length})` : "";
-      return textResult(`Payee Transactions (${txns.length})${filterNote}:\n${lines.join("\n")}`);
+      const note = filterNote(cleared, flag, txns.length, allTxns.length);
+      return textResult(`Payee Transactions (${txns.length})${note}:\n${lines.join("\n")}`);
     } catch (e: any) {
       return errorResult(e);
     }
@@ -445,10 +471,11 @@ export function registerTransactionTools(server: McpServer) {
       until_date: z.string().optional().describe("Only return transactions on or before this date (YYYY-MM-DD)"),
       type: z.enum(TRANSACTION_TYPES).optional().describe("Filter by type"),
       cleared: z.enum(CLEARED_FILTER_VALUES).optional().describe(CLEARED_FILTER_DESC),
+      flag: z.enum(FLAG_FILTER_VALUES).optional().describe(FLAG_FILTER_DESC),
       last_knowledge_of_server: z.number().optional().describe("Delta request token"),
     }),
     annotations: { readOnlyHint: true },
-  }, async ({ budget_id, month, since_date, until_date, type, cleared, last_knowledge_of_server }) => {
+  }, async ({ budget_id, month, since_date, until_date, type, cleared, flag, last_knowledge_of_server }) => {
     try {
       const response = await getClient().transactions.getTransactionsByMonthRaw({
         planId: budget_id,
@@ -459,11 +486,11 @@ export function registerTransactionTools(server: McpServer) {
         lastKnowledgeOfServer: last_knowledge_of_server,
       }).then((r) => r.value());
       const allTxns = response.data.transactions;
-      const txns = allTxns.filter((t) => matchesClearedFilter(t, cleared));
+      const txns = allTxns.filter((t) => matchesClearedFilter(t, cleared) && matchesFlagFilter(t, flag));
       if (txns.length === 0) return textResult(`No transactions found for ${month}.`);
       const lines = txns.map(formatTransaction);
-      const filterNote = cleared ? ` (filtered to cleared=${cleared}, ${txns.length} of ${allTxns.length})` : "";
-      return textResult(`Month Transactions for ${month} (${txns.length})${filterNote}:\n${lines.join("\n")}`);
+      const note = filterNote(cleared, flag, txns.length, allTxns.length);
+      return textResult(`Month Transactions for ${month} (${txns.length})${note}:\n${lines.join("\n")}`);
     } catch (e: any) {
       return errorResult(e);
     }

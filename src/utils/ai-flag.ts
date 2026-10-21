@@ -17,7 +17,24 @@
  *   transactions that come back unflagged get the AI flag, in one follow-up
  *   bulk request (one extra API call per write that needs it).
  * - Bank imports and scheduled transactions are left alone.
+ * - A person's choice is not an AI's: inside asHuman() (a tool called with
+ *   `human: true`), nothing is marked, and an edit that already carries the AI
+ *   flag has it cleared, since a person has now decided it. Other colors stay.
  */
+
+import { AsyncLocalStorage } from "node:async_hooks";
+
+const humanChoice = new AsyncLocalStorage<boolean>();
+
+/** Run fn as a person's choice when human is true: its writes are not AI-flagged. */
+export function asHuman<T>(human: boolean | undefined, fn: () => Promise<T>): Promise<T> {
+  return human ? humanChoice.run(true, fn) : fn();
+}
+
+export const HUMAN_DESC =
+  "true when the person chose this change (they named the category, split or edit, or picked one of your " +
+  "options): the write is not given the AI flag, and an AI flag already on it is cleared. Leave it unset when " +
+  "you decided.";
 
 export const FLAG_COLORS = ["red", "orange", "yellow", "green", "blue", "purple"] as const;
 export type FlagColor = (typeof FLAG_COLORS)[number];
@@ -90,12 +107,14 @@ export function withAiFlag(inner: typeof fetch, color: FlagColor | null = aiFlag
     const segment = match[1];
     const body = parseBody(init);
     if (!body) return inner(input, init);
+    const human = humanChoice.getStore() === true;
 
     // Create: a new transaction has no flag to keep, so set it in the request.
     if (method === "POST" && segment === undefined) {
       const items = [body.transaction, ...((body.transactions as unknown[]) ?? [])].filter(
         (t): t is Item => !!t && typeof t === "object"
       );
+      if (human) return inner(input, init);
       for (const t of items) if (!("flag_color" in t)) t.flag_color = color;
       return inner(input, { ...init, body: JSON.stringify(body) });
     }
@@ -108,7 +127,8 @@ export function withAiFlag(inner: typeof fetch, color: FlagColor | null = aiFlag
     const requested = (isSingle ? [body.transaction] : ((body.transactions as unknown[]) ?? [])).filter(
       (t): t is Item => !!t && typeof t === "object"
     );
-    const marked = requested.filter(wantsMark);
+    // A person's edit counts even when it only approves: they reviewed it.
+    const marked = requested.filter(human ? (t) => !("flag_color" in t) : wantsMark);
     const response = await inner(input, init);
     if (!response.ok || marked.length === 0) return response;
 
@@ -121,8 +141,10 @@ export function withAiFlag(inner: typeof fetch, color: FlagColor | null = aiFlag
     const returned: Item[] = isSingle
       ? [json?.data?.transaction].filter(Boolean)
       : json?.data?.transactions ?? [];
+    // AI edits mark what came back unflagged; a person's edits clear the AI flag.
+    const next = human ? null : color;
     const targets = returned.filter((t) => {
-      if (t.flag_color) return false;
+      if (human ? t.flag_color !== color : !!t.flag_color) return false;
       return marked.some((m) =>
         isSingle ||
         (m.id !== undefined && m.id === t.id) ||
@@ -138,17 +160,17 @@ export function withAiFlag(inner: typeof fetch, color: FlagColor | null = aiFlag
       const flagResponse = await inner(bulkUrl, {
         method: "PATCH",
         headers: init?.headers,
-        body: JSON.stringify({ transactions: targets.map((t) => ({ id: t.id, flag_color: color })) }),
+        body: JSON.stringify({ transactions: targets.map((t) => ({ id: t.id, flag_color: next })) }),
       });
       if (!flagResponse.ok) {
-        console.error(`AI flag: marking ${targets.length} transaction(s) failed with HTTP ${flagResponse.status}`);
+        console.error(`AI flag: ${human ? "clearing" : "marking"} ${targets.length} transaction(s) failed with HTTP ${flagResponse.status}`);
         return response;
       }
     } catch (e) {
-      console.error(`AI flag: marking ${targets.length} transaction(s) failed: ${e}`);
+      console.error(`AI flag: ${human ? "clearing" : "marking"} ${targets.length} transaction(s) failed: ${e}`);
       return response;
     }
-    for (const t of targets) t.flag_color = color;
+    for (const t of targets) t.flag_color = next;
     return rebuild(response, json);
   };
 }

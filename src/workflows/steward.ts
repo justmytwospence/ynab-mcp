@@ -4,6 +4,7 @@ import { getClient } from "../ynab-client.js";
 import { getBudgetSnapshot, invalidateBudgetSnapshot } from "../budget-snapshot.js";
 import { textResult, errorResult, jsonResult, formatCurrency } from "../utils/formatting.js";
 import { describeError } from "../utils/errors.js";
+import { HUMAN_DESC, asHuman } from "../utils/ai-flag.js";
 import { BudgetModel } from "./lib/budget-model.js";
 import { findIntegrityProblems, planRepairs, type Findings, type RepairPlan, type Repair } from "./lib/integrity.js";
 import { planMonth, type MonthPlan } from "./lib/month-plan.js";
@@ -213,9 +214,10 @@ export function registerStewardTools(server: McpServer) {
       date_slack_days: z.number().int().default(7),
       apply: z.boolean().default(false),
       format,
+      human: z.boolean().optional().describe(HUMAN_DESC),
     }),
     annotations: { readOnlyHint: false, destructiveHint: false },
-  }, async (args) => {
+  }, async ({ human, ...args }) => asHuman(human, async () => {
     try {
       const { snapshot, apiCalls } = await getBudgetSnapshot(args.budget_id);
       const model = new BudgetModel(snapshot);
@@ -275,7 +277,7 @@ export function registerStewardTools(server: McpServer) {
     } catch (e) {
       return errorResult(e);
     }
-  });
+  }));
 
   server.registerTool("list_item_categories", {
     title: "List Remembered Item Categories",

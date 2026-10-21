@@ -102,6 +102,11 @@ name the flag (e.g. "AI") and filter by it; through the server, pass `flag: "ai"
 - A flag you set yourself is never replaced, and a `flag_color` the caller passes wins.
 - Marking an update costs one extra API call per write (a follow-up bulk request for the
   transactions that came back unflagged); creates carry the flag in the request.
+- A person's choice is not an AI's: pass `human: true` to `create_transaction(s)`,
+  `update_transaction(s)` or `enrich_transactions` when the person decided the change
+  (named the category, picked one of your options). Nothing is marked, and an AI flag already
+  on an edited transaction is cleared (one extra call), since a person has now decided it.
+  Their own flag colors are kept.
 
 ### Rate limit awareness
 

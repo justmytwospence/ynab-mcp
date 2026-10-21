@@ -2,7 +2,7 @@ import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/server";
 import { getClient } from "../ynab-client.js";
 import { textResult, errorResult, formatCurrency, dollarsToMilliunits } from "../utils/formatting.js";
-import { FLAG_COLORS, aiFlagColor } from "../utils/ai-flag.js";
+import { FLAG_COLORS, HUMAN_DESC, aiFlagColor, asHuman } from "../utils/ai-flag.js";
 import type { TransactionDetail, HybridTransaction } from "ynab";
 
 const CLEARED_VALUES = ["cleared", "uncleared", "reconciled"] as const;
@@ -148,9 +148,10 @@ export function registerTransactionTools(server: McpServer) {
         category_id: z.string().optional(),
         memo: z.string().optional(),
       })).optional().describe("Split transaction parts (amounts must sum to the total)"),
+      human: z.boolean().optional().describe(HUMAN_DESC),
     }),
     annotations: { readOnlyHint: false },
-  }, async ({ budget_id, account_id, date, amount, payee_id, payee_name, category_id, memo, cleared, approved, flag_color, subtransactions }) => {
+  }, async ({ human, budget_id, account_id, date, amount, payee_id, payee_name, category_id, memo, cleared, approved, flag_color, subtransactions }) => asHuman(human, async () => {
     try {
       const response = await getClient().transactions.createTransaction(budget_id, {
         transaction: {
@@ -184,7 +185,7 @@ export function registerTransactionTools(server: McpServer) {
     } catch (e: any) {
       return errorResult(e);
     }
-  });
+  }));
 
   server.registerTool("create_transactions", {
     title: "Create Multiple Transactions",
@@ -203,9 +204,10 @@ export function registerTransactionTools(server: McpServer) {
         approved: z.boolean().optional(),
         flag_color: z.enum(FLAG_COLORS).optional(),
       })).describe("Array of transactions to create"),
+      human: z.boolean().optional().describe(HUMAN_DESC),
     }),
     annotations: { readOnlyHint: false },
-  }, async ({ budget_id, transactions }) => {
+  }, async ({ human, budget_id, transactions }) => asHuman(human, async () => {
     try {
       const response = await getClient().transactions.createTransaction(budget_id, {
         transactions: transactions.map((t) => ({
@@ -226,7 +228,7 @@ export function registerTransactionTools(server: McpServer) {
     } catch (e: any) {
       return errorResult(e);
     }
-  });
+  }));
 
   server.registerTool("update_transaction", {
     title: "Update Transaction",
@@ -250,9 +252,10 @@ export function registerTransactionTools(server: McpServer) {
         payee_id: z.string().optional(),
         memo: z.string().optional(),
       })).optional().describe("Turn a non-split transaction into a split. Once split, the API cannot change the legs; the YNAB app can."),
+      human: z.boolean().optional().describe(HUMAN_DESC),
     }),
     annotations: { readOnlyHint: false },
-  }, async ({ budget_id, transaction_id, ...fields }) => {
+  }, async ({ human, budget_id, transaction_id, ...fields }) => asHuman(human, async () => {
     try {
       const data: any = { ...fields };
       if (data.amount != null) data.amount = dollarsToMilliunits(data.amount);
@@ -271,7 +274,7 @@ export function registerTransactionTools(server: McpServer) {
     } catch (e: any) {
       return errorResult(e);
     }
-  });
+  }));
 
   server.registerTool("update_transactions", {
     title: "Bulk Update Transactions",
@@ -293,9 +296,10 @@ export function registerTransactionTools(server: McpServer) {
         approved: z.boolean().optional(),
         flag_color: z.enum(FLAG_COLORS).optional(),
       })).describe("Transactions to update"),
+      human: z.boolean().optional().describe(HUMAN_DESC),
     }),
     annotations: { readOnlyHint: false },
-  }, async ({ budget_id, transactions }) => {
+  }, async ({ human, budget_id, transactions }) => asHuman(human, async () => {
     try {
       const response = await getClient().transactions.updateTransactions(budget_id, {
         transactions: transactions.map((t) => {
@@ -314,7 +318,7 @@ export function registerTransactionTools(server: McpServer) {
     } catch (e: any) {
       return errorResult(e);
     }
-  });
+  }));
 
   server.registerTool("delete_transaction", {
     title: "Delete Transaction",

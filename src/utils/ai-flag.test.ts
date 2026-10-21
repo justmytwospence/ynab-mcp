@@ -1,6 +1,6 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { aiFlagColor, withAiFlag } from "./ai-flag.js";
+import { aiFlagColor, asHuman, withAiFlag } from "./ai-flag.js";
 
 const BASE = "https://api.ynab.com/v1/plans/p1";
 
@@ -95,4 +95,36 @@ test("imports and scheduled transactions are left alone", async () => {
   assert.equal(y.calls.length, 2);
   assert.deepEqual(y.calls[0]!.body, {});
   assert.equal(y.calls[1]!.body.scheduled_transaction.flag_color, undefined);
+});
+
+test("a person's create is not marked", async () => {
+  const y = fakeYnab();
+  const f = withAiFlag(y.fetchFn, "purple");
+  await asHuman(true, () => send(f, "POST", "/transactions", { transaction: { amount: 1 } }));
+  assert.equal(y.calls.length, 1);
+  assert.equal(y.calls[0]!.body.transaction.flag_color, undefined);
+});
+
+test("a person's edit clears the AI flag, keeps their own colors, marks nothing", async () => {
+  const y = fakeYnab({ a: "purple", b: "red", c: null, d: "purple" });
+  const f = withAiFlag(y.fetchFn, "purple");
+  const res = await asHuman(true, () => send(f, "PATCH", "/transactions", {
+    transactions: [
+      { id: "a", category_id: "fast-food", approved: true }, // AI-flagged -> cleared
+      { id: "b", category_id: "x" }, // their color -> kept
+      { id: "c", category_id: "x" }, // unflagged -> stays unflagged
+      { id: "d", approved: true }, // approving is a decision too -> cleared
+    ],
+  }));
+  assert.equal(y.calls.length, 2);
+  assert.deepEqual(y.calls[1]!.body, { transactions: [{ id: "a", flag_color: null }, { id: "d", flag_color: null }] });
+  assert.deepEqual(y.flags, { a: null, b: "red", c: null, d: null });
+  assert.equal(res.data.transactions.find((t: any) => t.id === "a").flag_color, null);
+});
+
+test("outside asHuman, AI marking is unchanged", async () => {
+  const y = fakeYnab({ a: null });
+  const f = withAiFlag(y.fetchFn, "purple");
+  await asHuman(false, () => send(f, "PUT", "/transactions/a", { transaction: { memo: "x" } }));
+  assert.equal(y.flags.a, "purple");
 });

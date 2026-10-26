@@ -1,6 +1,8 @@
 import type { CurrencyFormat } from "ynab";
 import { apiUsageTracker } from "./api-usage.js";
 import { describeError } from "./errors.js";
+import { z } from "zod";
+import { inOperation, operationUsage } from "./operation.js";
 
 const RATE_LIMIT_WARN_THRESHOLD = 50;
 const RATE_LIMIT_CRITICAL_THRESHOLD = 20;
@@ -139,37 +141,76 @@ function rateLimitFooter(): string {
   if (usage.remaining > RATE_LIMIT_WARN_THRESHOLD) return "";
 
   const reset = usage.windowResetsAt
-    ? ` Window resets at ${usage.windowResetsAt}.`
+    ? ` Next observed call expires at ${usage.windowResetsAt}; the hour does not reset all at once.`
     : "";
 
   if (usage.remaining === 0) {
-    return `\n\n[RATE LIMIT REACHED] 0/${usage.limit} calls remaining this hour.${reset} Further requests will fail with 429 until the window slides.`;
+    return `\n\n[RATE LIMIT REACHED] Local estimated allowance exhausted (0/${usage.limit}).${reset} Requests are blocked locally until a slot opens; other clients using this token are unobserved.`;
   }
   if (usage.remaining < RATE_LIMIT_CRITICAL_THRESHOLD) {
-    return `\n\n[RATE LIMIT CRITICAL] ${usage.remaining}/${usage.limit} calls remaining this hour.${reset} Pause non-essential calls.`;
+    return `\n\n[RATE LIMIT CRITICAL] ${usage.remaining}/${usage.limit} estimated calls remaining this rolling hour.${reset} Pause non-essential calls.`;
   }
-  return `\n\n[RATE LIMIT WARNING] ${usage.remaining}/${usage.limit} calls remaining this hour.${reset}`;
+  return `\n\n[RATE LIMIT WARNING] ${usage.remaining}/${usage.limit} estimated calls remaining this rolling hour.${reset}`;
 }
 
-/** Build a text response for MCP tool results */
-export function textResult(text: string) {
-  return { content: [{ type: "text" as const, text: text + rateLimitFooter() }] };
-}
+// Only this stable envelope is declared; provider/domain payloads vary by endpoint.
+export const resultSchema = z.object({
+  text: z.string(),
+  data: z.json().nullable(),
+  api_usage: z.record(z.string(), z.json()),
+  request_cost: z.object({ attempts: z.number().int().nonnegative(), warnings: z.array(z.string()) }),
+});
 
-/**
- * A machine-readable result for automation (n8n parses the text as JSON), so
- * the rate-limit warning travels inside the object instead of after it.
- */
-export function jsonResult(value: object) {
-  const usage = apiUsageTracker.getUsage();
-  const body = { ...value, api_calls_remaining: usage.remaining };
-  return { content: [{ type: "text" as const, text: JSON.stringify(body) }] };
-}
-
-/** Build an error response for MCP tool results */
-export function errorResult(error: unknown) {
-  return {
-    content: [{ type: "text" as const, text: `Error: ${describeError(error)}${rateLimitFooter()}` }],
-    isError: true,
+function result(text: string, data: unknown = null, isError = false) {
+  const cost = operationUsage();
+  if (cost.warnings.length > 20) cost.warnings = [...cost.warnings.slice(0, 20), "Additional warnings omitted; inspect the partial operation before continuing."];
+  cost.warnings = cost.warnings.map(warning => Buffer.from(warning).subarray(0, 500).toString("utf8"));
+  if (inOperation()) {
+    text = text.replace(/(API calls used: |Total API calls used: )\d+/g, `$1${cost.attempts}`);
+    if (data && typeof data === "object" && !Array.isArray(data)) {
+      const details = data as Record<string, unknown>;
+      if ("api_calls" in details || "apiCalls" in details) data = {
+        ...details,
+        ...("api_calls" in details ? { api_calls: cost.attempts } : {}),
+        ...("apiCalls" in details ? { apiCalls: cost.attempts } : {}),
+      };
+    }
+  }
+  const encoded = JSON.stringify(data) ?? "null";
+  if (Buffer.byteLength(encoded) > 262144) {
+    data = null;
+    cost.warnings.push("Structured domain data omitted: exceeded 256 KiB. Narrow filters/dates or use bounded resource pages; do not infer complete coverage.");
+  }
+  if (Buffer.byteLength(text) > 114000) {
+    text = Buffer.from(text).subarray(0, 114000).toString("utf8") + "\n[TRUNCATED: tool text limited within the 128 KiB response budget.]";
+    cost.warnings.push("Text truncated; narrow filters/dates or use bounded resource pages. Mutations already performed are not undone.");
+  }
+  if (cost.warnings.length) text += `\n\nPartial result warnings:\n${cost.warnings.join("\n")}`;
+  const structuredContent = {
+    text, data: JSON.parse(data === null ? "null" : encoded) as z.infer<ReturnType<typeof z.json>>,
+    api_usage: apiUsageTracker.getUsage(), request_cost: cost,
   };
+  return {
+    content: [{ type: "text" as const, text: text + rateLimitFooter() }],
+    structuredContent,
+    ...(isError ? { isError: true } : {}),
+  };
+}
+
+/** Compatible human text plus a stable machine-readable envelope. */
+export function textResult(text: string, data: unknown = null) { return result(text, data); }
+
+/** Existing JSON-in-text automation stays valid, including warnings inside JSON. */
+export function jsonResult(value: object) {
+  const body = { ...value, ...(inOperation() ? { api_calls: operationUsage().attempts } : {}), api_calls_remaining: apiUsageTracker.getUsage().remaining };
+  const out = result(JSON.stringify(body), body);
+  const compatible = Buffer.byteLength(JSON.stringify(body)) > 112000
+    ? { result_omitted: true, reason: "JSON result exceeded output bound; narrow the request. Applied mutations are not undone.", api_calls: operationUsage().attempts, api_calls_remaining: body.api_calls_remaining }
+    : body;
+  out.content[0]!.text = JSON.stringify({ ...compatible, warnings: out.structuredContent.request_cost.warnings });
+  return out;
+}
+
+export function errorResult(error: unknown) {
+  return result(`Error: ${describeError(error)}`, { error: describeError(error) }, true);
 }

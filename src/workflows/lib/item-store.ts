@@ -1,5 +1,5 @@
 import { mkdirSync, readFileSync, renameSync, writeFileSync } from "node:fs";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 
 /**
  * What the server remembers between runs: which category a purchased item
@@ -33,7 +33,6 @@ export class ItemStore {
 
   static open(): ItemStore {
     const dir = process.env.YNAB_MCP_STATE_DIR ?? join(process.cwd(), "state");
-    mkdirSync(dir, { recursive: true });
     return new ItemStore(join(dir, "items.json"));
   }
 
@@ -67,6 +66,7 @@ export class ItemStore {
 
   save() {
     if (!this.path) return;
+    mkdirSync(dirname(this.path), { recursive: true });
     const tmp = `${this.path}.tmp`;
     writeFileSync(tmp, JSON.stringify(this.data, null, 1));
     renameSync(tmp, this.path);

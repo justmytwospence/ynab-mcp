@@ -1,9 +1,10 @@
 import { McpServer } from "@modelcontextprotocol/server";
+import { registerTool } from "../utils/register.js";
 import { getClient } from "../ynab-client.js";
 import { textResult, errorResult } from "../utils/formatting.js";
 
 export function registerUserTools(server: McpServer) {
-  server.registerTool("get_user", {
+  registerTool(server, "get_user", {
     title: "Get User",
     description: "[1 API call] Get the authenticated user's information including user ID",
     annotations: { readOnlyHint: true },
@@ -11,7 +12,7 @@ export function registerUserTools(server: McpServer) {
     try {
       const response = await getClient().user.getUser();
       const user = response.data.user;
-      return textResult(`User ID: ${user.id}`);
+      return textResult(`User ID: ${user.id}`, response.data);
     } catch (e: any) {
       return errorResult(e);
     }

@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/server";
+import { registerTool } from "../utils/register.js";
 import { getClient } from "../ynab-client.js";
 import { textResult, errorResult, formatCurrency, dollarsToMilliunits } from "../utils/formatting.js";
 import { FLAG_COLORS, HUMAN_DESC, aiFlagColor, asHuman } from "../utils/ai-flag.js";
@@ -52,11 +53,11 @@ function formatTransaction(t: TransactionDetail | HybridTransaction): string {
 }
 
 export function registerTransactionTools(server: McpServer) {
-  server.registerTool("list_transactions", {
+  registerTool(server, "list_transactions", {
     title: "List Transactions",
     description:
-      "[1 API call] List transactions for a budget with optional filters. Returns most recent transactions first. " +
-      "IMPORTANT: when since_date is omitted the server returns only the LAST TWELVE MONTHS, not all history, and says nothing about the truncation. Pass since_date explicitly for historical work, or use get_budget, whose full export has no date window.",
+      "[1 API call] List transactions for a budget with optional filters, preserving upstream order. " +
+      "IMPORTANT: when since_date is omitted the server returns only the LAST TWELVE MONTHS, not all history, and says nothing about the truncation. Pass since_date explicitly for historical work, or use snapshot-backed resources/workflows for history. get_budget itself returns only a summary.",
     inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       since_date: z.string().optional().describe("Only return transactions on or after this date (YYYY-MM-DD). Omitting this defaults to one year ago, silently truncating history."),
@@ -78,18 +79,19 @@ export function registerTransactionTools(server: McpServer) {
       }).then((r) => r.value());
       const allTxns = response.data.transactions;
       const txns = allTxns.filter((t) => matchesClearedFilter(t, cleared) && matchesFlagFilter(t, flag));
-      if (txns.length === 0) return textResult("No transactions found.");
+      if (txns.length === 0) return textResult("No transactions found.", { transactions: txns, server_knowledge: response.data.server_knowledge });
       const lines = txns.map(formatTransaction);
       const note = filterNote(cleared, flag, txns.length, allTxns.length);
       return textResult(
-        `Transactions (${txns.length})${note}:\n${lines.join("\n")}\n\nServer Knowledge: ${response.data.server_knowledge}`
+        `Transactions (${txns.length})${note}:\n${lines.join("\n")}\n\nServer Knowledge: ${response.data.server_knowledge}`,
+        { transactions: txns, server_knowledge: response.data.server_knowledge },
       );
     } catch (e: any) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("get_transaction", {
+  registerTool(server, "get_transaction", {
     title: "Get Transaction",
     description: "[1 API call] Get details for a single transaction",
     inputSchema: z.object({
@@ -120,13 +122,13 @@ export function registerTransactionTools(server: McpServer) {
           lines.push(`  - ${formatCurrency(sub.amount)} | ${sub.category_name ?? "Uncategorized"} | ${sub.memo ?? ""}`);
         }
       }
-      return textResult(lines.join("\n"));
+      return textResult(lines.join("\n"), response.data);
     } catch (e: any) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("create_transaction", {
+  registerTool(server, "create_transaction", {
     title: "Create Transaction",
     description: "[1 API call] Create a new transaction. Amounts are in dollars (positive for inflows, negative for outflows). For split transactions, set category_id to null and provide subtransactions.",
     inputSchema: z.object({
@@ -136,11 +138,11 @@ export function registerTransactionTools(server: McpServer) {
       amount: z.number().describe("Amount in dollars (negative for outflows, e.g., -25.50)"),
       payee_id: z.string().optional().describe("Payee ID (if known)"),
       payee_name: z.string().optional().describe("Payee name (will match or create payee)"),
-      category_id: z.string().optional().describe("Category ID (omit for split transactions)"),
+      category_id: z.string().nullable().optional().describe("Category ID (omit or set null for split transactions)"),
       memo: z.string().optional().describe("Transaction memo"),
       cleared: z.enum(CLEARED_VALUES).optional().describe("Cleared status"),
       approved: z.boolean().optional().describe("Whether the transaction is approved (default: false)"),
-      flag_color: z.enum(FLAG_COLORS).optional().describe("Flag color"),
+      flag_color: z.enum(FLAG_COLORS).nullable().optional().describe("Flag color"),
       subtransactions: z.array(z.object({
         amount: z.number().describe("Subtransaction amount in dollars"),
         payee_id: z.string().optional(),
@@ -160,7 +162,8 @@ export function registerTransactionTools(server: McpServer) {
           amount: dollarsToMilliunits(amount),
           payee_id,
           payee_name,
-          category_id,
+          // On creates, null and omission both mean no parent category (split).
+          category_id: category_id ?? undefined,
           memo,
           cleared,
           approved,
@@ -177,17 +180,18 @@ export function registerTransactionTools(server: McpServer) {
       const t = response.data.transaction;
       if (t) {
         return textResult(
-          `Created transaction: ${t.date} | ${formatCurrency(t.amount)} | ${t.payee_name ?? "No payee"} | ${t.category_name ?? "Uncategorized"}\nID: ${t.id}`
+          `Created transaction: ${t.date} | ${formatCurrency(t.amount)} | ${t.payee_name ?? "No payee"} | ${t.category_name ?? "Uncategorized"}\nID: ${t.id}`,
+          response.data,
         );
       }
       const txns = response.data.transactions;
-      return textResult(`Created ${txns?.length ?? 0} transaction(s).`);
+      return textResult(`Created ${txns?.length ?? 0} transaction(s).`, response.data);
     } catch (e: any) {
       return errorResult(e);
     }
   }));
 
-  server.registerTool("create_transactions", {
+  registerTool(server, "create_transactions", {
     title: "Create Multiple Transactions",
     description: "[1 API call, bulk] Create multiple transactions at once. Each transaction needs account_id, date, and amount at minimum.",
     inputSchema: z.object({
@@ -202,8 +206,8 @@ export function registerTransactionTools(server: McpServer) {
         memo: z.string().optional(),
         cleared: z.enum(CLEARED_VALUES).optional(),
         approved: z.boolean().optional(),
-        flag_color: z.enum(FLAG_COLORS).optional(),
-      })).describe("Array of transactions to create"),
+        flag_color: z.enum(FLAG_COLORS).nullable().optional(),
+      })).min(1).max(1000).describe("Array of transactions to create (local maximum 1000)"),
       human: z.boolean().optional().describe(HUMAN_DESC),
     }),
     annotations: { readOnlyHint: false },
@@ -224,13 +228,13 @@ export function registerTransactionTools(server: McpServer) {
         })),
       });
       const created = response.data.transactions;
-      return textResult(`Created ${created?.length ?? 0} transaction(s).`);
+      return textResult(`Created ${created?.length ?? 0} transaction(s).`, response.data);
     } catch (e: any) {
       return errorResult(e);
     }
   }));
 
-  server.registerTool("update_transaction", {
+  registerTool(server, "update_transaction", {
     title: "Update Transaction",
     description: "[1 API call, +1 if it gets the AI flag] Update an existing transaction. " + "Credit Card Payment categories are NOT permitted here and are silently IGNORED rather than rejected, so assigning one reports success and changes nothing. Use update_month_category to assign money to a Credit Card Payment category.",
     inputSchema: z.object({
@@ -245,7 +249,7 @@ export function registerTransactionTools(server: McpServer) {
       memo: z.string().optional().describe("New memo"),
       cleared: z.enum(CLEARED_VALUES).optional().describe("New cleared status"),
       approved: z.boolean().optional().describe("New approval status"),
-      flag_color: z.enum(FLAG_COLORS).optional().describe("New flag color"),
+      flag_color: z.enum(FLAG_COLORS).nullable().optional().describe("New flag color"),
       subtransactions: z.array(z.object({
         amount: z.number().describe("Leg amount in dollars (negative for outflow); legs must sum to the transaction amount"),
         category_id: z.string().optional(),
@@ -269,14 +273,15 @@ export function registerTransactionTools(server: McpServer) {
       });
       const t = response.data.transaction;
       return textResult(
-        `Updated transaction: ${t.date} | ${formatCurrency(t.amount)} | ${t.payee_name ?? "No payee"}\nID: ${t.id}`
+        `Updated transaction: ${t.date} | ${formatCurrency(t.amount)} | ${t.payee_name ?? "No payee"}\nID: ${t.id}`,
+        response.data,
       );
     } catch (e: any) {
       return errorResult(e);
     }
   }));
 
-  server.registerTool("update_transactions", {
+  registerTool(server, "update_transactions", {
     title: "Bulk Update Transactions",
     description: "[1 API call, bulk, +1 if any get the AI flag] Update multiple transactions at once. Each must include either id or import_id to identify the transaction. " +
       "Credit Card Payment categories are NOT permitted here and are silently IGNORED rather than rejected, so assigning one reports success and changes nothing. Use update_month_category to assign money to a Credit Card Payment category.",
@@ -294,8 +299,8 @@ export function registerTransactionTools(server: McpServer) {
         memo: z.string().optional(),
         cleared: z.enum(CLEARED_VALUES).optional(),
         approved: z.boolean().optional(),
-        flag_color: z.enum(FLAG_COLORS).optional(),
-      })).describe("Transactions to update"),
+        flag_color: z.enum(FLAG_COLORS).nullable().optional(),
+      }).refine(t => Boolean(t.id || t.import_id), "Each update needs id or import_id")).min(1).max(1000).describe("Transactions to update (local maximum 1000)"),
       human: z.boolean().optional().describe(HUMAN_DESC),
     }),
     annotations: { readOnlyHint: false },
@@ -314,13 +319,13 @@ export function registerTransactionTools(server: McpServer) {
         }),
       });
       const updated = response.data.transactions;
-      return textResult(`Updated ${updated?.length ?? 0} transaction(s).`);
+      return textResult(`Updated ${updated?.length ?? 0} transaction(s).`, response.data);
     } catch (e: any) {
       return errorResult(e);
     }
   }));
 
-  server.registerTool("delete_transaction", {
+  registerTool(server, "delete_transaction", {
     title: "Delete Transaction",
     description: "[1 API call] Delete a transaction",
     inputSchema: z.object({
@@ -332,13 +337,13 @@ export function registerTransactionTools(server: McpServer) {
     try {
       const response = await getClient().transactions.deleteTransaction(budget_id, transaction_id);
       const t = response.data.transaction;
-      return textResult(`Deleted transaction: ${t.date} | ${formatCurrency(t.amount)} | ${t.payee_name ?? "No payee"}\nID: ${t.id}`);
+      return textResult(`Deleted transaction: ${t.date} | ${formatCurrency(t.amount)} | ${t.payee_name ?? "No payee"}\nID: ${t.id}`, response.data);
     } catch (e: any) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("import_transactions", {
+  registerTool(server, "import_transactions", {
     title: "Import Transactions",
     description: "[1 API call] Trigger an import of transactions from linked financial institutions",
     inputSchema: z.object({
@@ -350,18 +355,19 @@ export function registerTransactionTools(server: McpServer) {
       const response = await getClient().transactions.importTransactions(budget_id);
       const data = response.data;
       return textResult(
-        `Import complete:\n  Transaction IDs imported: ${data.transaction_ids?.length ?? 0}`
+        `Import complete:\n  Transaction IDs imported: ${data.transaction_ids?.length ?? 0}`,
+        response.data,
       );
     } catch (e: any) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("list_account_transactions", {
+  registerTool(server, "list_account_transactions", {
     title: "List Account Transactions",
     description:
       "[1 API call] List transactions for a specific account. " +
-      "IMPORTANT: when since_date is omitted the server returns only the LAST TWELVE MONTHS, not all history, and says nothing about the truncation. Pass since_date explicitly for historical work, or use get_budget, whose full export has no date window. " +
+      "IMPORTANT: when since_date is omitted the server returns only the LAST TWELVE MONTHS, not all history, and says nothing about the truncation. Pass since_date explicitly for historical work, or use snapshot-backed resources/workflows for history. get_budget itself returns only a summary. " +
       "Pass cleared='unreconciled' to get exactly the transactions still pending the next reconciliation.",
     inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
@@ -386,18 +392,18 @@ export function registerTransactionTools(server: McpServer) {
       }).then((r) => r.value());
       const allTxns = response.data.transactions;
       const txns = allTxns.filter((t) => matchesClearedFilter(t, cleared) && matchesFlagFilter(t, flag));
-      if (txns.length === 0) return textResult("No transactions found for this account.");
+      if (txns.length === 0) return textResult("No transactions found for this account.", { transactions: txns, server_knowledge: response.data.server_knowledge });
       const lines = txns.map(formatTransaction);
       const note = filterNote(cleared, flag, txns.length, allTxns.length);
-      return textResult(`Account Transactions (${txns.length})${note}:\n${lines.join("\n")}`);
+      return textResult(`Account Transactions (${txns.length})${note}:\n${lines.join("\n")}`, { transactions: txns, server_knowledge: response.data.server_knowledge });
     } catch (e: any) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("list_category_transactions", {
+  registerTool(server, "list_category_transactions", {
     title: "List Category Transactions",
-    description: "[1 API call] List transactions for a specific category. " + "IMPORTANT: when since_date is omitted the server returns only the LAST TWELVE MONTHS, not all history, and says nothing about the truncation. Pass since_date explicitly for historical work, or use get_budget, whose full export has no date window.",
+    description: "[1 API call] List transactions for a specific category. " + "IMPORTANT: when since_date is omitted the server returns only the LAST TWELVE MONTHS, not all history, and says nothing about the truncation. Pass since_date explicitly for historical work, or use snapshot-backed resources/workflows for history. get_budget itself returns only a summary.",
     inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       category_id: z.string().describe("The category ID"),
@@ -421,18 +427,18 @@ export function registerTransactionTools(server: McpServer) {
       }).then((r) => r.value());
       const allTxns = response.data.transactions;
       const txns = allTxns.filter((t) => matchesClearedFilter(t, cleared) && matchesFlagFilter(t, flag));
-      if (txns.length === 0) return textResult("No transactions found for this category.");
+      if (txns.length === 0) return textResult("No transactions found for this category.", { transactions: txns, server_knowledge: response.data.server_knowledge });
       const lines = txns.map(formatTransaction);
       const note = filterNote(cleared, flag, txns.length, allTxns.length);
-      return textResult(`Category Transactions (${txns.length})${note}:\n${lines.join("\n")}`);
+      return textResult(`Category Transactions (${txns.length})${note}:\n${lines.join("\n")}`, { transactions: txns, server_knowledge: response.data.server_knowledge });
     } catch (e: any) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("list_payee_transactions", {
+  registerTool(server, "list_payee_transactions", {
     title: "List Payee Transactions",
-    description: "[1 API call] List transactions for a specific payee. " + "IMPORTANT: when since_date is omitted the server returns only the LAST TWELVE MONTHS, not all history, and says nothing about the truncation. Pass since_date explicitly for historical work, or use get_budget, whose full export has no date window.",
+    description: "[1 API call] List transactions for a specific payee. " + "IMPORTANT: when since_date is omitted the server returns only the LAST TWELVE MONTHS, not all history, and says nothing about the truncation. Pass since_date explicitly for historical work, or use snapshot-backed resources/workflows for history. get_budget itself returns only a summary.",
     inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       payee_id: z.string().describe("The payee ID"),
@@ -456,16 +462,16 @@ export function registerTransactionTools(server: McpServer) {
       }).then((r) => r.value());
       const allTxns = response.data.transactions;
       const txns = allTxns.filter((t) => matchesClearedFilter(t, cleared) && matchesFlagFilter(t, flag));
-      if (txns.length === 0) return textResult("No transactions found for this payee.");
+      if (txns.length === 0) return textResult("No transactions found for this payee.", { transactions: txns, server_knowledge: response.data.server_knowledge });
       const lines = txns.map(formatTransaction);
       const note = filterNote(cleared, flag, txns.length, allTxns.length);
-      return textResult(`Payee Transactions (${txns.length})${note}:\n${lines.join("\n")}`);
+      return textResult(`Payee Transactions (${txns.length})${note}:\n${lines.join("\n")}`, { transactions: txns, server_knowledge: response.data.server_knowledge });
     } catch (e: any) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("list_month_transactions", {
+  registerTool(server, "list_month_transactions", {
     title: "List Month Transactions",
     description: "[1 API call] List transactions for a specific month",
     inputSchema: z.object({
@@ -491,10 +497,10 @@ export function registerTransactionTools(server: McpServer) {
       }).then((r) => r.value());
       const allTxns = response.data.transactions;
       const txns = allTxns.filter((t) => matchesClearedFilter(t, cleared) && matchesFlagFilter(t, flag));
-      if (txns.length === 0) return textResult(`No transactions found for ${month}.`);
+      if (txns.length === 0) return textResult(`No transactions found for ${month}.`, { transactions: txns, server_knowledge: response.data.server_knowledge });
       const lines = txns.map(formatTransaction);
       const note = filterNote(cleared, flag, txns.length, allTxns.length);
-      return textResult(`Month Transactions for ${month} (${txns.length})${note}:\n${lines.join("\n")}`);
+      return textResult(`Month Transactions for ${month} (${txns.length})${note}:\n${lines.join("\n")}`, { transactions: txns, server_knowledge: response.data.server_knowledge });
     } catch (e: any) {
       return errorResult(e);
     }

@@ -1,14 +1,15 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/server";
+import { registerTool } from "../utils/register.js";
 import { getClient } from "../ynab-client.js";
 import { textResult, errorResult } from "../utils/formatting.js";
 
 export function registerPayeeTools(server: McpServer) {
-  server.registerTool("list_payees", {
+  registerTool(server, "list_payees", {
     title: "List Payees",
     description:
       "[1 API call] List payees for a budget. Budgets often have 1000+ payees; " +
-      "use `name_filter` (case-insensitive substring) to avoid loading the full list. " +
+      "use `name_filter` (case-insensitive substring) to reduce output, not upstream calls (all payees are fetched). " +
       "Use `limit` to cap result size when listing without a filter.",
     inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
@@ -45,14 +46,15 @@ export function registerPayeeTools(server: McpServer) {
       const truncNote = truncated ? `\n(showing first ${limit}; pass a more specific name_filter or higher limit to see more)` : "";
 
       return textResult(
-        `${header}:${truncNote}\n${lines.join("\n")}\n\nServer Knowledge: ${response.data.server_knowledge}`
+        `${header}:${truncNote}\n${lines.join("\n")}\n\nServer Knowledge: ${response.data.server_knowledge}`,
+        { payees: filtered, total_matched: totalMatched, truncated, server_knowledge: response.data.server_knowledge },
       );
     } catch (e: any) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("get_payee", {
+  registerTool(server, "get_payee", {
     title: "Get Payee",
     description: "[1 API call] Get details for a single payee",
     inputSchema: z.object({
@@ -69,13 +71,13 @@ export function registerPayeeTools(server: McpServer) {
         `Transfer Account: ${p.transfer_account_id ?? "None"}`,
         `ID: ${p.id}`,
       ];
-      return textResult(lines.join("\n"));
+      return textResult(lines.join("\n"), response.data);
     } catch (e: any) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("update_payee", {
+  registerTool(server, "update_payee", {
     title: "Update Payee",
     description: "[1 API call] Update a payee's name",
     inputSchema: z.object({
@@ -90,13 +92,13 @@ export function registerPayeeTools(server: McpServer) {
         payee: { name },
       });
       const p = response.data.payee;
-      return textResult(`Updated payee "${p.name}"\nID: ${p.id}`);
+      return textResult(`Updated payee "${p.name}"\nID: ${p.id}`, response.data);
     } catch (e: any) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("create_payee", {
+  registerTool(server, "create_payee", {
     title: "Create Payee",
     description: "[1 API call] Create a payee (e.g. before scheduling transactions to a new merchant)",
     inputSchema: z.object({
@@ -108,7 +110,7 @@ export function registerPayeeTools(server: McpServer) {
     try {
       const response = await getClient().payees.createPayee(budget_id, { payee: { name } });
       const p = response.data.payee;
-      return textResult(`Created payee "${p.name}"\nID: ${p.id}`);
+      return textResult(`Created payee "${p.name}"\nID: ${p.id}`, response.data);
     } catch (e: any) {
       return errorResult(e);
     }

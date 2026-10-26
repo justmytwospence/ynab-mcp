@@ -43,7 +43,7 @@ export function describeError(e: unknown): string {
     const { id, name, detail } = e.error;
     if (id === "429") {
       return `${detail} (${name}, ${id}). The 200 requests/hour limit is per access token and is shared with ` +
-        `the YNAB app; check get_api_usage.`;
+        `other clients using that same token (not necessarily YNAB's own app sessions). Check get_api_usage for local estimates and cooldown.`;
     }
     if (isDataLimitReached(e)) {
       return `${detail} (${name}, ${id}). This is a data limit, not a rate limit - retrying will not help.`;

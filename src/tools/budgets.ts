@@ -1,11 +1,12 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/server";
+import { registerTool } from "../utils/register.js";
 import { getClient } from "../ynab-client.js";
 import { textResult, errorResult, formatCurrency, setActiveCurrencyFormat } from "../utils/formatting.js";
 import { getBudgetSnapshot, snapshotMonths } from "../budget-snapshot.js";
 
 export function registerBudgetTools(server: McpServer) {
-  server.registerTool("list_budgets", {
+  registerTool(server, "list_budgets", {
     title: "List Budgets",
     description: "[1 API call] List all budgets the user has access to, with optional account info",
     inputSchema: z.object({
@@ -26,19 +27,19 @@ export function registerBudgetTools(server: McpServer) {
         }
         return line;
       });
-      return textResult(`Budgets:\n${lines.join("\n")}`);
+      return textResult(`Budgets:\n${lines.join("\n")}`, response.data);
     } catch (e: any) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("get_budget", {
+  registerTool(server, "get_budget", {
     title: "Get Budget",
     description:
-      "[1 API call, cached] Get a single budget's full detail: every account, category, payee, transaction, " +
-      "and every budget month with its per-category budgeted/activity/balance. The response is cached in " +
-      "memory and refreshed by delta, so repeat calls and the workflows built on it cost one request or none. " +
-      "Use 'last-used' for the most recently accessed budget.",
+      "[Normally 1 API call; fallback variable] Refresh a cached budget export and return a SUMMARY (counts, month range, provenance), not every entity. " +
+      "Workflows and bounded resource templates reuse the snapshot. Refresh uses delta; an unusable delta adds a full read. " +
+      "A 503 fallback costs 5 + M month + Y yearly transaction calls and omits schedules/payee locations. Read retries can add calls. " +
+      "Check get_api_usage first; fallback phases preflight local budget. Use 'last-used' for the most recently accessed budget.",
     inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
       force_refresh: z.boolean().default(false).describe("Discard the cached snapshot and refetch the full export"),
@@ -57,7 +58,7 @@ export function registerBudgetTools(server: McpServer) {
         `Categories: ${b.categories?.length ?? 0}`,
         `Payees: ${b.payees?.length ?? 0}`,
         `Transactions: ${b.transactions?.length ?? 0}`,
-        `Scheduled Transactions: ${b.scheduled_transactions?.length ?? 0}`,
+        `Scheduled Transactions: ${b.scheduled_transactions?.length ?? (snapshot.assembledPiecewise ? "not fetched" : 0)}`,
         months.length > 0
           ? `Months: ${months.length} (${months[0]!.month} to ${months[months.length - 1]!.month}), with per-category detail`
           : `Months: 0`,
@@ -67,16 +68,16 @@ export function registerBudgetTools(server: McpServer) {
       if (snapshot.assembledPiecewise) {
         summary.push(
           `Note: the full export timed out (503), so this was assembled from the per-resource endpoints.`,
-          `It has no plan-level server knowledge, so each refresh re-assembles it.`
+          `It has no plan-level server knowledge, so each refresh re-assembles it. Scheduled transactions and payee locations are not fetched.`
         );
       }
-      return textResult(summary.join("\n"));
+      return textResult(summary.join("\n"), { budget_id: snapshot.budgetId, name: b.name, counts: { accounts: b.accounts?.length ?? 0, categories: b.categories?.length ?? 0, transactions: b.transactions?.length ?? 0 }, months: months.map(m => m.month), fetched_at: new Date(snapshot.fetchedAt).toISOString(), assembled_piecewise: snapshot.assembledPiecewise, server_knowledge: snapshot.serverKnowledge, api_calls: apiCalls });
     } catch (e: any) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("get_budget_settings", {
+  registerTool(server, "get_budget_settings", {
     title: "Get Budget Settings",
     description: "[1 API call] Get a budget's date and currency format settings",
     inputSchema: z.object({
@@ -99,7 +100,7 @@ export function registerBudgetTools(server: McpServer) {
         ``,
         `Amounts in this session will now be formatted using this currency: ${formatCurrency(1234560)}`,
       ];
-      return textResult(lines.join("\n"));
+      return textResult(lines.join("\n"), response.data);
     } catch (e: any) {
       return errorResult(e);
     }

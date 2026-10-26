@@ -1,10 +1,11 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/server";
+import { registerTool } from "../utils/register.js";
 import { getClient } from "../ynab-client.js";
 import { textResult, errorResult, formatCurrency, attributes } from "../utils/formatting.js";
 
 export function registerMonthTools(server: McpServer) {
-  server.registerTool("list_months", {
+  registerTool(server, "list_months", {
     title: "List Budget Months",
     description: "[1 API call] List all budget months for a budget, showing income, budgeted, activity, and ready to assign",
     inputSchema: z.object({
@@ -20,14 +21,15 @@ export function registerMonthTools(server: McpServer) {
         `- ${m.month}: Income ${formatCurrency(m.income)} | Budgeted ${formatCurrency(m.budgeted)} | Activity ${formatCurrency(m.activity)} | To Be Budgeted ${formatCurrency(m.to_be_budgeted)}`
       );
       return textResult(
-        `Budget Months (${months.length}):\n${lines.join("\n")}\n\nServer Knowledge: ${response.data.server_knowledge}`
+        `Budget Months (${months.length}):\n${lines.join("\n")}\n\nServer Knowledge: ${response.data.server_knowledge}`,
+        response.data,
       );
     } catch (e: any) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("get_month", {
+  registerTool(server, "get_month", {
     title: "Get Budget Month",
     description: "[1 API call] Get detailed info for a single budget month including all category balances. Use 'current' for the current month. Hidden categories are included and marked [hidden].",
     inputSchema: z.object({
@@ -57,7 +59,7 @@ export function registerMonthTools(server: McpServer) {
           lines.push(`  - ${c.name}${attributes(c)}: Budgeted ${formatCurrency(c.budgeted)} | Activity ${formatCurrency(c.activity)} | Balance ${formatCurrency(c.balance)}`);
         }
       }
-      return textResult(lines.join("\n"));
+      return textResult(lines.join("\n"), response.data);
     } catch (e: any) {
       return errorResult(e);
     }

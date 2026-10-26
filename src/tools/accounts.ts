@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/server";
+import { registerTool } from "../utils/register.js";
 import { getClient } from "../ynab-client.js";
 import { textResult, errorResult, formatCurrency } from "../utils/formatting.js";
 import { getReconciliationAnchor } from "../workflows/lib/reconciliation.js";
@@ -11,7 +12,7 @@ const CREATABLE_ACCOUNT_TYPES = [
 ] as const;
 
 export function registerAccountTools(server: McpServer) {
-  server.registerTool("list_accounts", {
+  registerTool(server, "list_accounts", {
     title: "List Accounts",
     description: "[1 API call] List all accounts for a budget including balances and types",
     inputSchema: z.object({
@@ -29,14 +30,15 @@ export function registerAccountTools(server: McpServer) {
         return `- ${a.name}${status}: ${formatCurrency(a.balance)} (${a.type}, ${onBudget}) [ID: ${a.id}]`;
       });
       return textResult(
-        `Accounts (${accounts.length}):\n${lines.join("\n")}\n\nServer Knowledge: ${response.data.server_knowledge}`
+        `Accounts (${accounts.length}):\n${lines.join("\n")}\n\nServer Knowledge: ${response.data.server_knowledge}`,
+        response.data,
       );
     } catch (e: any) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("get_account", {
+  registerTool(server, "get_account", {
     title: "Get Account",
     description:
       "[1-2 API calls] Get details for a single account. " +
@@ -67,8 +69,10 @@ export function registerAccountTools(server: McpServer) {
         `ID: ${a.id}`,
       ];
 
+      let reconciliation: Awaited<ReturnType<typeof getReconciliationAnchor>> | null = null;
       if (include_reconciliation) {
         const anchor = await getReconciliationAnchor(budget_id, account_id);
+        reconciliation = anchor;
         lines.push(``);
         lines.push(`Reconciliation Anchor:`);
         if (anchor.lastReconciledDate) {
@@ -90,13 +94,13 @@ export function registerAccountTools(server: McpServer) {
         );
       }
 
-      return textResult(lines.join("\n"));
+      return textResult(lines.join("\n"), { account: a, reconciliation });
     } catch (e: any) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("create_account", {
+  registerTool(server, "create_account", {
     title: "Create Account",
     description: "[1 API call] Create a new account in a budget",
     inputSchema: z.object({
@@ -112,7 +116,7 @@ export function registerAccountTools(server: McpServer) {
         account: { name, type, balance: Math.round(balance * 1000) },
       });
       const a = response.data.account;
-      return textResult(`Created account "${a.name}" (${a.type}) with balance ${formatCurrency(a.balance)}\nID: ${a.id}`);
+      return textResult(`Created account "${a.name}" (${a.type}) with balance ${formatCurrency(a.balance)}\nID: ${a.id}`, response.data);
     } catch (e: any) {
       return errorResult(e);
     }

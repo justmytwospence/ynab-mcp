@@ -1,9 +1,12 @@
 import { api, Configuration, MoneyMovementsApi } from "ynab";
 import { apiUsageTracker } from "./utils/api-usage.js";
-import { withAiFlag } from "./utils/ai-flag.js";
+import { withAiFlag, aiFlagColor } from "./utils/ai-flag.js";
 
 // Every request: rate-limit accounting, plus the AI flag on transaction writes.
-const trackedFetch = withAiFlag(apiUsageTracker.wrappedFetch);
+const flagColor = aiFlagColor();
+const trackedFetch = withAiFlag(apiUsageTracker.wrappedFetch, flagColor, (cost, fn) => apiUsageTracker.withBudget(cost, fn));
+/** Worst-case HTTP cost of update calls, including optional AI/human flag follow-ups. */
+export const transactionUpdateCost = (writes = 1) => writes * (flagColor ? 2 : 1);
 
 class TrackedApi extends api {
   constructor(accessToken: string) {

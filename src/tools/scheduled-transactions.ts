@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/server";
+import { registerTool } from "../utils/register.js";
 import { getClient } from "../ynab-client.js";
 import { textResult, errorResult, formatCurrency, dollarsToMilliunits } from "../utils/formatting.js";
 
@@ -11,7 +12,7 @@ const FREQUENCIES = [
 ] as const;
 
 export function registerScheduledTransactionTools(server: McpServer) {
-  server.registerTool("list_scheduled_transactions", {
+  registerTool(server, "list_scheduled_transactions", {
     title: "List Scheduled Transactions",
     description: "[1 API call] List all scheduled (recurring) transactions for a budget",
     inputSchema: z.object({
@@ -25,20 +26,21 @@ export function registerScheduledTransactionTools(server: McpServer) {
         budget_id, last_knowledge_of_server
       );
       const txns = response.data.scheduled_transactions;
-      if (txns.length === 0) return textResult("No scheduled transactions found.");
+      if (txns.length === 0) return textResult("No scheduled transactions found.", response.data);
       const lines = txns.map((t) => {
         const freq = t.frequency ?? "once";
         return `- ${t.date_next ?? t.date_first} | ${formatCurrency(t.amount)} | ${t.payee_name ?? "No payee"} | ${t.category_name ?? "Uncategorized"} | ${freq} | ${t.account_name} [ID: ${t.id}]`;
       });
       return textResult(
-        `Scheduled Transactions (${txns.length}):\n${lines.join("\n")}\n\nServer Knowledge: ${response.data.server_knowledge}`
+        `Scheduled Transactions (${txns.length}):\n${lines.join("\n")}\n\nServer Knowledge: ${response.data.server_knowledge}`,
+        response.data,
       );
     } catch (e: any) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("get_scheduled_transaction", {
+  registerTool(server, "get_scheduled_transaction", {
     title: "Get Scheduled Transaction",
     description: "[1 API call] Get details for a single scheduled transaction",
     inputSchema: z.object({
@@ -70,13 +72,13 @@ export function registerScheduledTransactionTools(server: McpServer) {
           lines.push(`  - ${formatCurrency(sub.amount)} | ${sub.category_name ?? "Uncategorized"} | ${sub.memo ?? ""}`);
         }
       }
-      return textResult(lines.join("\n"));
+      return textResult(lines.join("\n"), response.data);
     } catch (e: any) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("create_scheduled_transaction", {
+  registerTool(server, "create_scheduled_transaction", {
     title: "Create Scheduled Transaction",
     description: "[1 API call] Create a new scheduled (recurring) transaction. Date must be in the future (up to 5 years).",
     inputSchema: z.object({
@@ -109,14 +111,15 @@ export function registerScheduledTransactionTools(server: McpServer) {
       });
       const t = response.data.scheduled_transaction;
       return textResult(
-        `Created scheduled transaction: ${t.date_first} | ${formatCurrency(t.amount)} | ${t.payee_name ?? "No payee"} | ${t.frequency}\nID: ${t.id}`
+        `Created scheduled transaction: ${t.date_first} | ${formatCurrency(t.amount)} | ${t.payee_name ?? "No payee"} | ${t.frequency}\nID: ${t.id}`,
+        response.data,
       );
     } catch (e: any) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("update_scheduled_transaction", {
+  registerTool(server, "update_scheduled_transaction", {
     title: "Update Scheduled Transaction",
     description: "[1 API call] Update an existing scheduled transaction",
     inputSchema: z.object({
@@ -152,14 +155,15 @@ export function registerScheduledTransactionTools(server: McpServer) {
       );
       const t = response.data.scheduled_transaction;
       return textResult(
-        `Updated scheduled transaction: ${t.date_first} | ${formatCurrency(t.amount)} | ${t.frequency}\nID: ${t.id}`
+        `Updated scheduled transaction: ${t.date_first} | ${formatCurrency(t.amount)} | ${t.frequency}\nID: ${t.id}`,
+        response.data,
       );
     } catch (e: any) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("delete_scheduled_transaction", {
+  registerTool(server, "delete_scheduled_transaction", {
     title: "Delete Scheduled Transaction",
     description: "[1 API call] Delete a scheduled transaction",
     inputSchema: z.object({
@@ -174,7 +178,8 @@ export function registerScheduledTransactionTools(server: McpServer) {
       );
       const t = response.data.scheduled_transaction;
       return textResult(
-        `Deleted scheduled transaction: ${t.date_first} | ${formatCurrency(t.amount)} | ${t.payee_name ?? "No payee"}\nID: ${t.id}`
+        `Deleted scheduled transaction: ${t.date_first} | ${formatCurrency(t.amount)} | ${t.payee_name ?? "No payee"}\nID: ${t.id}`,
+        response.data,
       );
     } catch (e: any) {
       return errorResult(e);

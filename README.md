@@ -87,7 +87,9 @@ Add to your `claude_desktop_config.json`:
 
 ## Tools
 
-49 tools covering the full YNAB API. All monetary amounts use YNAB's milliunits format (e.g., `$12.34` = `12340`).
+55 tools, plus 2 optional Amazon tools when configured. Tool amount inputs described in dollars use currency units; raw API/structured financial data uses YNAB milliunits (e.g., `$12.34` = `12340`). Every tool declares all four behavioral hints. Preview/apply workflows remain writes; annotations do not enforce approval or permissions.
+
+Results retain existing text (including `format: "json"` JSON-in-text) and add a validated `structuredContent` envelope: `text`, endpoint/workflow `data`, `api_usage` local estimates, and `request_cost` with actual HTTP attempts and partial-result warnings. Only the stable envelope has an output schema; domain payloads vary by tool. Mutations invalidate cached snapshots even after a lost response. Text is bounded to 128 KiB and domain data to 256 KiB: explicit warnings flag truncation/omission (`data: null`); oversized JSON-in-text remains valid with `result_omitted: true`. Narrow requests rather than applying from partial previews.
 
 ### AI flag
 
@@ -110,15 +112,16 @@ name the flag (e.g. "AI") and filter by it; through the server, pass `flag: "ai"
 
 ### Rate limit awareness
 
-The YNAB API caps usage at **200 requests per hour** (sliding window) per token. The server tracks every call and exposes:
+The YNAB API allowance is **200 requests/token/rolling hour**. Accounting here is a **local estimate**, not authoritative remaining quota: other clients using the same access token and previous process lifetimes are invisible. YNAB's own web/mobile sessions are not assumed to use this token. Every actual YNAB HTTP attempt counts, including failed transports, retries, and AI/human flag follow-ups.
 
-- `get_api_usage` tool / `ynab://api-usage` resource — explicit, on-demand check (0 API calls).
-- **Automatic warnings** appended to every tool result once usage gets high:
-  - `[RATE LIMIT WARNING]` at 50 or fewer remaining
-  - `[RATE LIMIT CRITICAL]` at 20 or fewer remaining
-  - `[RATE LIMIT REACHED]` at 0 remaining
+- `get_api_usage` / `ynab://api-usage`: cached/local status, **zero HTTP**. Includes observation times, reservations, next available slot, last 429/403.4, and cooldown. No remaining/reset headers are invented.
+- `windowResetsAt` is the **next observed call expiry**, not an all-at-once reset. `allObservedCallsExpireAt` assumes no further calls; `nextAvailableSlotAt` is only a local estimate.
+- Local admission blocks requests at exhaustion, reserves known-cost batch phases, and bounds upstream concurrency to 4, queue to 64, and request timeouts to 45 seconds. Reservations cannot guarantee external quota or atomic writes.
+- Safe GET/HEAD reads may retry **once** for 429/500/502, with at most 5 seconds backoff. A longer `Retry-After` is exposed as cooldown rather than slept through; absent 429 headers use a labeled local 60-second backoff. Writes and ambiguous transport failures are never automatically replayed. Inspect current state before retrying mutations, especially partial transfers/reconciliation adjustments.
+- Only error **403.4** records a data-limit event, an unquantified limit distinct from hourly quota. Other 403 permission errors are not called data limits.
+- Automatic local-estimate warnings appear at 50 or fewer remaining, critical below 20, and reached at zero. JSON-in-text results keep warnings inside JSON.
 
-Each tool's description includes its API call cost in brackets (e.g. `[1 API call]`). Prefer bulk tools (`create_transactions`, `update_transactions`) over loops of single-call tools.
+Tool descriptions show baseline costs; retries and flag follow-ups can add calls. Prefer bulk transaction tools to loops. Snapshot reads normally cost one request (delta refresh), an unusable delta adds one full read, and a 503 fallback adds **5 + M + Y** requests (budget months and transaction years) after failed attempts. The fallback preflights discovery and history phases, omits schedules/payee locations, and is not guaranteed to fit the current allowance. Check status before costly reads or apply, preview first, and confirm the specific changes before writing.
 
 ### User
 
@@ -131,7 +134,7 @@ Each tool's description includes its API call cost in brackets (e.g. `[1 API cal
 | Tool | Description |
 |------|-------------|
 | `list_budgets` | List all budgets with optional account info |
-| `get_budget` | Get a budget's full detail including every month's per-category amounts; cached in memory and refreshed by delta |
+| `get_budget` | Refresh a cached export and return a summary/counts/provenance, not the full export; workflows and scoped resources reuse the cache |
 | `get_budget_settings` | Get date and currency format settings |
 
 ### Accounts
@@ -230,7 +233,7 @@ Each tool's description includes its API call cost in brackets (e.g. `[1 API cal
 | `enrich_transactions` | Match Apple/Amazon receipts to transactions, write the product names into the memo, categorize or split by remembered item categories (1 API call to plan) |
 | `list_item_categories` | The item -> category mappings learned so far (0 API calls) |
 
-These read the cached export and accept `format: "json"` for automation.
+The snapshot workflows normally read one cached export/delta; the costs above are baselines, not fallback caps. `audit_budget_integrity`, `plan_month`, `suggest_categories` and `enrich_transactions` accept `format: "json"` for automation. Other workflows retain text plus structured results; `list_item_categories` reads only local state.
 
 ## Resources
 
@@ -238,14 +241,19 @@ Resources provide structured budget data that clients can pull into context with
 
 | Resource | URI | Description | API Cost |
 |----------|-----|-------------|----------|
-| API Usage | `ynab://api-usage` | Current rate limit status: calls used, remaining, window reset | 0 |
-| Budget Summary | `ynab://budgets/{budget_id}/summary` | Budget overview with accounts, balances, and category groups | 1 |
-| Account List | `ynab://budgets/{budget_id}/accounts` | All accounts with type, balance, cleared/uncleared balances | 1 |
-| Monthly Categories | `ynab://budgets/{budget_id}/months/{month}/categories` | All categories for a month with budgeted, activity, and balance | 1 |
+| Usage Guide | `ynab://guide` | Discoverable costs/safety guide, all template URIs and prompt names with examples (also usable by clients without templates/list or initialize instructions) | 0 HTTP |
+| API Usage | `ynab://api-usage` | Local rolling-hour estimates, next slot/cooldown and cached snapshot metadata; includes budget/preview guidance | 0 HTTP |
+| Budget Summary | `ynab://budgets/{budget_id}/summary` | Snapshot overview with provenance; up to 100 accounts/groups | Snapshot |
+| Account List | `ynab://budgets/{budget_id}/accounts` | Account balances/status; up to 500 rows | Normally 1 |
+| Monthly Categories | `ynab://budgets/{budget_id}/months/{month}/categories` | Category amounts for one month; up to 500 rows | Normally 1 |
+| Category Month | `ynab://budgets/{budget_id}/categories/{category_id}/months/{month}` | One category-month with provenance and goal-history caveat | Snapshot |
+| Account Transactions | `ynab://budgets/{budget_id}/accounts/{account_id}/transactions/{since_date}/{until_date}/{limit}/{offset}` | At most 366 days and 100 rows/page (byte bounds may return fewer), offset up to 10000; `next_uri`/`truncated` report output coverage, memos clipped to 200 characters with `memo_truncated` | Snapshot |
+
+Snapshot resource reads cost 0 when the cache is younger than 60 seconds; otherwise normal snapshot/delta/fallback costs above apply. Resource text is capped at 64 KiB with an explicit truncation notice. Dates use YYYY-MM-DD, months use the first of the month. Paging/filters bound returned context, not upstream work: YNAB has no export pagination. All resources use the same token/budget scope as tools, never write, and disclose network costs. Listing resources/templates or retrieving prompts performs no HTTP or filesystem writes.
 
 ## Prompts
 
-Prompts are guided workflow templates that users can invoke to walk through common budgeting tasks. They instruct the LLM which tools to call and how to interpret results.
+Prompts are guided workflow templates; retrieval makes zero HTTP requests and does not execute the suggested actions. Each includes budget checks, batching, explicit history windows, preview/confirmation and no-blind-replay guidance. `ynab://guide` lists invocation examples and suggested-action costs.
 
 | Prompt | Arguments | Description |
 |--------|-----------|-------------|
@@ -261,6 +269,7 @@ Prompts are guided workflow templates that users can invoke to walk through comm
 ```sh
 npm run dev    # Watch mode with tsx
 npm run build  # Compile TypeScript
+npm test       # Offline contract, snapshot, usage and workflow tests (no account calls)
 npm start      # Run compiled server
 ```
 

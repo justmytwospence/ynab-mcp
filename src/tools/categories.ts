@@ -1,11 +1,12 @@
 import { z } from "zod";
 import type { CategoryResponse } from "ynab";
 import { McpServer } from "@modelcontextprotocol/server";
+import { registerTool } from "../utils/register.js";
 import { getClient, requestUntyped } from "../ynab-client.js";
 import { textResult, errorResult, formatCurrency, dollarsToMilliunits, attributes, goalSummary, goalLines } from "../utils/formatting.js";
 
 export function registerCategoryTools(server: McpServer) {
-  server.registerTool("list_categories", {
+  registerTool(server, "list_categories", {
     title: "List Categories",
     description:
       "[1 API call] List all categories grouped by category group. Hidden categories are included by default " +
@@ -23,7 +24,9 @@ export function registerCategoryTools(server: McpServer) {
   }, async ({ budget_id, include_hidden, include_internal, include_deleted, last_knowledge_of_server }) => {
     try {
       const response = await getClient().categories.getCategories(budget_id, last_knowledge_of_server);
-      const groups = response.data.category_groups;
+      const included = (entity: { hidden?: boolean; internal?: boolean; deleted?: boolean }) =>
+        (include_hidden || !entity.hidden) && (include_internal || !entity.internal) && (include_deleted || !entity.deleted);
+      const groups = response.data.category_groups.filter(included).map(g => ({ ...g, categories: g.categories.filter(included) }));
       const lines: string[] = [];
       for (const group of groups) {
         if (group.hidden && !include_hidden) continue;
@@ -43,13 +46,13 @@ export function registerCategoryTools(server: McpServer) {
           }
         }
       }
-      return textResult(`Categories:${lines.join("\n")}\n\nServer Knowledge: ${response.data.server_knowledge}`);
+      return textResult(`Categories:${lines.join("\n")}\n\nServer Knowledge: ${response.data.server_knowledge}`, { category_groups: groups, server_knowledge: response.data.server_knowledge });
     } catch (e: any) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("get_category", {
+  registerTool(server, "get_category", {
     title: "Get Category",
     description:
       "[1 API call] Get details for a single category. Goal fields describe the goal AS CONFIGURED NOW - the API " +
@@ -76,13 +79,13 @@ export function registerCategoryTools(server: McpServer) {
         `Deleted: ${c.deleted}`,
         `ID: ${c.id}`,
       ];
-      return textResult(lines.join("\n"));
+      return textResult(lines.join("\n"), response.data);
     } catch (e: any) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("create_category", {
+  registerTool(server, "create_category", {
     title: "Create Category",
     description: "[1 API call] Create a new category in a budget",
     inputSchema: z.object({
@@ -112,13 +115,13 @@ export function registerCategoryTools(server: McpServer) {
           })
         : await getClient().categories.createCategory(budget_id, { category });
       const c = response.data.category;
-      return textResult(`Created category "${c.name}"\nID: ${c.id}`);
+      return textResult(`Created category "${c.name}"\nID: ${c.id}`, response.data);
     } catch (e: any) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("update_category", {
+  registerTool(server, "update_category", {
     title: "Update Category",
     description:
       "[1 API call] Update an existing category. This is the full writable surface: name, note, " +
@@ -159,14 +162,15 @@ export function registerCategoryTools(server: McpServer) {
         : await getClient().categories.updateCategory(budget_id, category_id, { category });
       const c = response.data.category;
       return textResult(
-        `Updated category "${c.name}" (group: ${c.category_group_name ?? c.category_group_id})\nID: ${c.id}`
+        `Updated category "${c.name}" (group: ${c.category_group_name ?? c.category_group_id})\nID: ${c.id}`,
+        response.data,
       );
     } catch (e: any) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("get_month_category", {
+  registerTool(server, "get_month_category", {
     title: "Get Month Category",
     description:
       "[1 API call] Get a category's budget details for a specific month. Goal fields reflect the goal as it is " +
@@ -196,13 +200,13 @@ export function registerCategoryTools(server: McpServer) {
           `Underfunding for ${month} is not assessable.`
         );
       }
-      return textResult(lines.join("\n"));
+      return textResult(lines.join("\n"), response.data);
     } catch (e: any) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("update_month_category", {
+  registerTool(server, "update_month_category", {
     title: "Update Month Category Budget",
     description: "[1 API call] Update the budgeted/assigned amount for a category in a specific month. This is how you allocate money to categories.",
     inputSchema: z.object({
@@ -218,13 +222,13 @@ export function registerCategoryTools(server: McpServer) {
         category: { budgeted: dollarsToMilliunits(budgeted) },
       });
       const c = response.data.category;
-      return textResult(`Updated "${c.name}" for ${month}: Budgeted ${formatCurrency(c.budgeted)}`);
+      return textResult(`Updated "${c.name}" for ${month}: Budgeted ${formatCurrency(c.budgeted)}`, response.data);
     } catch (e: any) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("create_category_group", {
+  registerTool(server, "create_category_group", {
     title: "Create Category Group",
     description: "[1 API call] Create a new category group in a budget",
     inputSchema: z.object({
@@ -238,13 +242,13 @@ export function registerCategoryTools(server: McpServer) {
         category_group: { name },
       });
       const g = response.data.category_group;
-      return textResult(`Created category group "${g.name}"\nID: ${g.id}`);
+      return textResult(`Created category group "${g.name}"\nID: ${g.id}`, response.data);
     } catch (e: any) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("update_category_group", {
+  registerTool(server, "update_category_group", {
     title: "Update Category Group",
     description: "[1 API call] Update a category group's name",
     inputSchema: z.object({
@@ -259,7 +263,7 @@ export function registerCategoryTools(server: McpServer) {
         category_group: { name },
       });
       const g = response.data.category_group;
-      return textResult(`Updated category group "${g.name}"\nID: ${g.id}`);
+      return textResult(`Updated category group "${g.name}"\nID: ${g.id}`, response.data);
     } catch (e: any) {
       return errorResult(e);
     }

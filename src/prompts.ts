@@ -1,14 +1,28 @@
 import { z } from "zod";
-import { McpServer } from "@modelcontextprotocol/server";
+import { McpServer, type GetPromptResult } from "@modelcontextprotocol/server";
+import { BUDGET_GUIDANCE } from "./utils/guidance.js";
+import { idSchema, monthSchema, dateSchema, validateInput } from "./utils/register.js";
+
+function registerBudgetPrompt<S extends z.ZodObject>(server: McpServer, name: string,
+  config: { title: string; description: string; argsSchema: S },
+  handler: (args: z.infer<S>) => Promise<GetPromptResult>) {
+  server.registerPrompt<z.ZodObject>(name, { ...config, description: config.description + " Retrieval: zero HTTP; suggested actions have API costs. Check usage and preview before apply." }, async args => {
+    const parsed = config.argsSchema.parse(args);
+    validateInput(parsed);
+    const result = await handler(parsed);
+    result.messages.unshift({ role: "user", content: { type: "text", text: BUDGET_GUIDANCE } });
+    return result;
+  });
+}
 
 export function registerPrompts(server: McpServer) {
-  server.registerPrompt("monthly-review", {
+  registerBudgetPrompt(server, "monthly-review", {
     title: "Monthly Budget Review",
     description:
       "Review a budget month: overspent categories, spending changes, underfunded goals, and credit card mismatches",
     argsSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
-      month: z.string().describe("Month to review (YYYY-MM-DD, first of month, e.g. 2026-03-01)"),
+      month: monthSchema.describe("Month to review (YYYY-MM-DD, first of month, e.g. 2026-03-01)"),
     }),
   }, async ({ budget_id, month }) => ({
     messages: [
@@ -33,14 +47,14 @@ export function registerPrompts(server: McpServer) {
     ],
   }));
 
-  server.registerPrompt("transaction-audit", {
+  registerBudgetPrompt(server, "transaction-audit", {
     title: "Transaction Audit",
     description:
       "Audit recent transactions for uncategorized, unapproved, possible duplicates, and unusual amounts",
     argsSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
-      account_id: z.string().describe("Account ID to audit"),
-      since_date: z.string().describe("Start date for audit window (YYYY-MM-DD)"),
+      account_id: idSchema.describe("Account ID to audit"),
+      since_date: dateSchema.describe("Start date for audit window (YYYY-MM-DD)"),
     }),
   }, async ({ budget_id, account_id, since_date }) => ({
     messages: [
@@ -63,7 +77,7 @@ export function registerPrompts(server: McpServer) {
     ],
   }));
 
-  server.registerPrompt("budget-setup-guide", {
+  registerBudgetPrompt(server, "budget-setup-guide", {
     title: "Budget Setup Guide",
     description:
       "Guided walkthrough for setting up a new or existing budget: accounts, categories, targets, and scheduled transactions",
@@ -92,13 +106,13 @@ export function registerPrompts(server: McpServer) {
     ],
   }));
 
-  server.registerPrompt("spending-analysis", {
+  registerBudgetPrompt(server, "spending-analysis", {
     title: "Spending Analysis",
     description:
       "Analyze spending patterns: category breakdown, budget vs. actual, and top payees",
     argsSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
-      month: z.string().describe("Month to analyze (YYYY-MM-DD, first of month, e.g. 2026-03-01)"),
+      month: monthSchema.describe("Month to analyze (YYYY-MM-DD, first of month, e.g. 2026-03-01)"),
     }),
   }, async ({ budget_id, month }) => ({
     messages: [
@@ -110,7 +124,7 @@ export function registerPrompts(server: McpServer) {
             `Analyze spending for budget "${budget_id}", month ${month}:`,
             "",
             "1. Fetch the month detail to get all category activity.",
-            "2. Rank categories by spending (highest activity first), excluding internal transfers and credit card payments.",
+            "2. Rank categories by spending (most negative activity first), excluding internal transfers and credit card payments.",
             "3. For each major spending category, show budgeted vs. actual and the variance (over/under).",
             "4. Fetch transactions for the month and identify the top 10 payees by total spend.",
             "5. Calculate total income vs. total spending for the month.",
@@ -121,14 +135,14 @@ export function registerPrompts(server: McpServer) {
     ],
   }));
 
-  server.registerPrompt("reconcile-account", {
+  registerBudgetPrompt(server, "reconcile-account", {
     title: "Reconcile Account",
     description:
       "Walk through reconciling a YNAB account against a bank balance: diagnose discrepancies, identify missing transactions, and close out",
     argsSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
-      account_id: z.string().describe("The account to reconcile"),
-      target_balance: z.string().describe("The actual balance from the bank as a dollar amount (e.g. '-4499.74' for a credit card)"),
+      account_id: idSchema.describe("The account to reconcile"),
+      target_balance: z.string().regex(/^-?\d+(?:\.\d+)?$/).max(30).describe("The actual balance from the bank as a dollar amount (e.g. '-4499.74' for a credit card)"),
     }),
   }, async ({ budget_id, account_id, target_balance }) => ({
     messages: [
@@ -155,13 +169,13 @@ export function registerPrompts(server: McpServer) {
     ],
   }));
 
-  server.registerPrompt("credit-card-audit", {
+  registerBudgetPrompt(server, "credit-card-audit", {
     title: "Credit Card Payment Audit",
     description:
       "Audit each credit card's funding gap for unexplained month-over-month drift, with optional auto-fix",
     argsSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
-      since_month: z.string().optional().describe("Only audit months on or after this date (YYYY-MM-DD, first of month)"),
+      since_month: monthSchema.optional().describe("Only audit months on or after this date (YYYY-MM-DD, first of month)"),
     }),
   }, async ({ budget_id, since_month }) => ({
     messages: [

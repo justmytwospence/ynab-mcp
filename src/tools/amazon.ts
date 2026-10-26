@@ -1,5 +1,6 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/server";
+import { registerTool } from "../utils/register.js";
 import { textResult, errorResult } from "../utils/formatting.js";
 
 /**
@@ -22,7 +23,7 @@ export function registerAmazonTools(server: McpServer) {
     return body;
   };
 
-  server.registerTool("amazon_order", {
+  registerTool(server, "amazon_order", {
     title: "Amazon Order",
     description:
       "[0 YNAB API calls; scrapes Amazon, slow] One Amazon order: its items with prices and every card charge " +
@@ -31,13 +32,14 @@ export function registerAmazonTools(server: McpServer) {
     annotations: { readOnlyHint: true },
   }, async ({ order_number }) => {
     try {
-      return textResult(JSON.stringify(await get(`/orders/${encodeURIComponent(order_number)}`), null, 1));
+      const data = await get(`/orders/${encodeURIComponent(order_number)}`);
+      return textResult(JSON.stringify(data, null, 1), data);
     } catch (e) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("amazon_receipts", {
+  registerTool(server, "amazon_receipts", {
     title: "Amazon Charges",
     description:
       "[0 YNAB API calls; scrapes Amazon, slow] Every Amazon card charge in the last `days` days with the items of " +
@@ -46,7 +48,8 @@ export function registerAmazonTools(server: McpServer) {
     annotations: { readOnlyHint: true },
   }, async ({ days }) => {
     try {
-      return textResult(JSON.stringify(await get(`/receipts?days=${days}`), null, 1));
+      const data = await get(`/receipts?days=${days}`);
+      return textResult(JSON.stringify(data, null, 1), data);
     } catch (e) {
       return errorResult(e);
     }

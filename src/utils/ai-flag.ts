@@ -23,6 +23,7 @@
  */
 
 import { AsyncLocalStorage } from "node:async_hooks";
+import { operationWarning } from "./operation.js";
 
 const humanChoice = new AsyncLocalStorage<boolean>();
 
@@ -96,7 +97,11 @@ function rebuild(response: Response, json: unknown): Response {
   });
 }
 
-export function withAiFlag(inner: typeof fetch, color: FlagColor | null = aiFlagColor()): typeof fetch {
+export function withAiFlag(
+  inner: typeof fetch,
+  color: FlagColor | null = aiFlagColor(),
+  reserve: <T>(cost: number, fn: () => Promise<T>) => Promise<T> = (_cost, fn) => fn(),
+): typeof fetch {
   if (!color) return inner;
 
   return async (input, init) => {
@@ -129,48 +134,52 @@ export function withAiFlag(inner: typeof fetch, color: FlagColor | null = aiFlag
     );
     // A person's edit counts even when it only approves: they reviewed it.
     const marked = requested.filter(human ? (t) => !("flag_color" in t) : wantsMark);
-    const response = await inner(input, init);
-    if (!response.ok || marked.length === 0) return response;
+    return reserve(marked.length > 0 ? 2 : 1, async () => {
+      const response = await inner(input, init);
+      if (!response.ok || marked.length === 0) return response;
 
-    let json: any;
-    try {
-      json = await response.clone().json();
-    } catch {
-      return response;
-    }
-    const returned: Item[] = isSingle
-      ? [json?.data?.transaction].filter(Boolean)
-      : json?.data?.transactions ?? [];
-    // AI edits mark what came back unflagged; a person's edits clear the AI flag.
-    const next = human ? null : color;
-    const targets = returned.filter((t) => {
-      if (human ? t.flag_color !== color : !!t.flag_color) return false;
-      return marked.some((m) =>
-        isSingle ||
-        (m.id !== undefined && m.id === t.id) ||
-        (m.import_id !== undefined && m.import_id === t.import_id)
-      );
-    });
-    if (targets.length === 0) return response;
-
-    const bulkUrl = new URL(url);
-    bulkUrl.pathname = bulkUrl.pathname.replace(/\/transactions(?:\/[^/]+)?\/?$/, "/transactions");
-    bulkUrl.search = "";
-    try {
-      const flagResponse = await inner(bulkUrl, {
-        method: "PATCH",
-        headers: init?.headers,
-        body: JSON.stringify({ transactions: targets.map((t) => ({ id: t.id, flag_color: next })) }),
-      });
-      if (!flagResponse.ok) {
-        console.error(`AI flag: ${human ? "clearing" : "marking"} ${targets.length} transaction(s) failed with HTTP ${flagResponse.status}`);
+      let json: any;
+      try {
+        json = await response.clone().json();
+      } catch {
         return response;
       }
-    } catch (e) {
-      console.error(`AI flag: ${human ? "clearing" : "marking"} ${targets.length} transaction(s) failed: ${e}`);
-      return response;
-    }
-    for (const t of targets) t.flag_color = next;
-    return rebuild(response, json);
+      const returned: Item[] = isSingle
+        ? [json?.data?.transaction].filter(Boolean)
+        : json?.data?.transactions ?? [];
+      // AI edits mark what came back unflagged; a person's edits clear the AI flag.
+      const next = human ? null : color;
+      const targets = returned.filter((t) => {
+        if (human ? t.flag_color !== color : !!t.flag_color) return false;
+        return marked.some((m) =>
+          isSingle ||
+          (m.id !== undefined && m.id === t.id) ||
+          (m.import_id !== undefined && m.import_id === t.import_id)
+        );
+      });
+      if (targets.length === 0) return response;
+
+      const bulkUrl = new URL(url);
+      bulkUrl.pathname = bulkUrl.pathname.replace(/\/transactions(?:\/[^/]+)?\/?$/, "/transactions");
+      bulkUrl.search = "";
+      try {
+        const flagResponse = await inner(bulkUrl, {
+          method: "PATCH",
+          headers: init?.headers,
+          body: JSON.stringify({ transactions: targets.map((t) => ({ id: t.id, flag_color: next })) }),
+        });
+        if (!flagResponse.ok) {
+          operationWarning(`Primary transaction update succeeded, but AI flag ${human ? "clearing" : "marking"} failed with HTTP ${flagResponse.status}. Inspect flags; do not replay the primary write.`);
+          console.error(`AI flag: ${human ? "clearing" : "marking"} ${targets.length} transaction(s) failed with HTTP ${flagResponse.status}`);
+          return response;
+        }
+      } catch (e) {
+        operationWarning(`Primary transaction update succeeded, but AI flag follow-up failed (${String(e)}). Inspect flags; do not replay the primary write.`);
+        console.error(`AI flag: ${human ? "clearing" : "marking"} ${targets.length} transaction(s) failed: ${e}`);
+        return response;
+      }
+      for (const t of targets) t.flag_color = next;
+      return rebuild(response, json);
+    });
   };
 }

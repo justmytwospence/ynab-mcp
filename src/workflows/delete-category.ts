@@ -1,10 +1,11 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/server";
+import { registerTool } from "../utils/register.js";
 import { textResult, errorResult } from "../utils/formatting.js";
 import { performCategoryMerge } from "./lib/category-merge.js";
 
 export function registerDeleteCategoryTool(server: McpServer) {
-  server.registerTool("delete_category", {
+  registerTool(server, "delete_category", {
     title: "Delete Category (with cleanup)",
     description:
       "[Variable API calls] [Workflow] Prepares a category for deletion by cleaning up its history: " +
@@ -64,7 +65,7 @@ export function registerDeleteCategoryTool(server: McpServer) {
         trailer = lines.join("\n");
       }
 
-      return textResult(result.output + trailer);
+      return textResult(result.output + trailer, result);
     } catch (e: any) {
       return errorResult(e);
     }

@@ -1,6 +1,8 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/server";
-import { getClient } from "../ynab-client.js";
+import { registerTool } from "../utils/register.js";
+import { getClient, transactionUpdateCost } from "../ynab-client.js";
+import { apiUsageTracker } from "../utils/api-usage.js";
 import { getBudgetSnapshot, invalidateBudgetSnapshot } from "../budget-snapshot.js";
 import { textResult, errorResult, jsonResult, formatCurrency } from "../utils/formatting.js";
 import { describeError } from "../utils/errors.js";
@@ -23,7 +25,7 @@ const money = (m: number) => formatCurrency(m);
 const month7 = (m: string) => m.substring(0, 7);
 
 export function registerStewardTools(server: McpServer) {
-  server.registerTool("audit_budget_integrity", {
+  registerTool(server, "audit_budget_integrity", {
     title: "Audit Budget Integrity",
     description:
       "[1 API call to audit, +1 per write] [Workflow] Finds what makes later numbers untrustworthy, across every " +
@@ -62,13 +64,13 @@ export function registerStewardTools(server: McpServer) {
       if (applied) invalidateBudgetSnapshot(args.budget_id);
       const calls = apiCalls + (applied?.writes ?? 0);
       if (args.format === "json") return jsonResult({ findings, plan, applied, api_calls: calls });
-      return textResult(renderIntegrity(findings, plan, applied, calls));
+      return textResult(renderIntegrity(findings, plan, applied, calls), { findings, plan, applied });
     } catch (e) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("plan_month", {
+  registerTool(server, "plan_month", {
     title: "Plan Month",
     description:
       "[1 API call to plan, +1 per write] [Workflow] Budgets a month by the house rules: every Variable Costs " +
@@ -100,30 +102,34 @@ export function registerStewardTools(server: McpServer) {
         if (!plan.affordable) {
           applied = { writes: 0, failed: [], skipped: "Ready to Assign does not cover the increase" };
         } else {
-          applied = { writes: 0, failed: [] };
-          for (const line of plan.lines) {
-            try {
-              await getClient().categories.updateMonthCategory(snapshot.budgetId, month, line.categoryId, {
-                category: { budgeted: line.target },
-              });
-              applied.writes += 1;
-            } catch (e) {
-              applied.writes += 1;
-              applied.failed.push(`${line.label}: ${describeError(e)}`);
+          const outcome = { writes: 0, failed: [] as string[] };
+          applied = outcome;
+          await apiUsageTracker.withBudget(plan.lines.length, async () => {
+            for (const line of plan.lines) {
+              try {
+                await getClient().categories.updateMonthCategory(snapshot.budgetId, month, line.categoryId, {
+                  category: { budgeted: line.target },
+                });
+                outcome.writes += 1;
+              } catch (e) {
+                outcome.writes += 1;
+                outcome.failed.push(`${line.label}: ${describeError(e)}. Outcome may be ambiguous; inspect before retrying.`);
+                break;
+              }
             }
-          }
+          });
           invalidateBudgetSnapshot(args.budget_id);
         }
       }
       const calls = apiCalls + (applied?.writes ?? 0);
       if (args.format === "json") return jsonResult({ plan, applied, api_calls: calls });
-      return textResult(renderPlan(plan, applied, calls));
+      return textResult(renderPlan(plan, applied, calls), { plan, applied });
     } catch (e) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("suggest_categories", {
+  registerTool(server, "suggest_categories", {
     title: "Suggest Categories",
     description:
       "[1 API call to suggest, +1 to apply] [Workflow] For uncategorized spending and unapproved transactions, " +
@@ -176,13 +182,13 @@ export function registerStewardTools(server: McpServer) {
         }
       }
       if (args.format === "json") return jsonResult({ suggestions, applied, api_calls: calls });
-      return textResult(renderSuggestions(suggestions, applied, calls));
+      return textResult(renderSuggestions(suggestions, applied, calls), { suggestions, applied });
     } catch (e) {
       return errorResult(e);
     }
   });
 
-  server.registerTool("enrich_transactions", {
+  registerTool(server, "enrich_transactions", {
     title: "Enrich Transactions From Receipts",
     description:
       "[1 API call to plan, +1 per split, +1 for the rest] [Workflow] Matches receipts (Apple email receipts, Amazon " +
@@ -227,7 +233,6 @@ export function registerStewardTools(server: McpServer) {
         store.setCategory(a.source, a.key, a.name || a.key, a.category_id);
       }
       // A dry run plans with the new mappings but does not remember them.
-      if (args.assign.length > 0 && args.apply) store.save();
       const receipts = args.receipts.map((r) => ({
         ...r,
         total: Math.round(r.total * 1000),
@@ -237,35 +242,41 @@ export function registerStewardTools(server: McpServer) {
       let calls = apiCalls;
       const applied = { updated: 0, split: 0, failed: [] as string[] };
       if (args.apply && plan.updates.length > 0) {
-        const client = getClient();
-        const plain = plan.updates.filter((u) => !u.subtransactions);
-        if (plain.length > 0) {
-          try {
-            await client.transactions.updateTransactions(snapshot.budgetId, {
-              transactions: plain.map((u) => ({ id: u.transactionId, memo: u.memo, ...(u.categoryId ? { category_id: u.categoryId } : {}) })),
-            });
-            applied.updated += plain.length;
-            for (const u of plain) if (!u.pending && u.categoryId) store.markEnriched(u.transactionId, u.receiptId);
-          } catch (e) {
-            applied.failed.push(`bulk update: ${describeError(e)}`);
+        const callsNeeded = transactionUpdateCost(plan.updates.filter(u => u.subtransactions).length + (plan.updates.some(u => !u.subtransactions) ? 1 : 0));
+        await apiUsageTracker.withBudget(callsNeeded, async () => {
+          if (args.assign.length) store.save();
+          const client = getClient();
+          const plain = plan.updates.filter((u) => !u.subtransactions);
+          if (plain.length > 0) {
+            try {
+              await client.transactions.updateTransactions(snapshot.budgetId, {
+                transactions: plain.map((u) => ({ id: u.transactionId, memo: u.memo, ...(u.categoryId ? { category_id: u.categoryId } : {}) })),
+              });
+              applied.updated += plain.length;
+              for (const u of plain) if (!u.pending && u.categoryId) store.markEnriched(u.transactionId, u.receiptId);
+            } catch (e) {
+              applied.failed.push(`bulk update: ${describeError(e)}`);
+            }
+            calls += 1;
           }
-          calls += 1;
-        }
-        for (const u of plan.updates.filter((x) => x.subtransactions)) {
-          try {
-            await client.transactions.updateTransaction(snapshot.budgetId, u.transactionId, {
-              transaction: { memo: u.memo, subtransactions: u.subtransactions },
-            });
-            applied.split += 1;
-            store.markEnriched(u.transactionId, u.receiptId);
-          } catch (e) {
-            applied.failed.push(`split ${u.transactionId}: ${describeError(e)}`);
+          for (const u of plan.updates.filter((x) => x.subtransactions)) {
+            if (applied.failed.length) break;
+            try {
+              await client.transactions.updateTransaction(snapshot.budgetId, u.transactionId, {
+                transaction: { memo: u.memo, subtransactions: u.subtransactions },
+              });
+              applied.split += 1;
+              store.markEnriched(u.transactionId, u.receiptId);
+            } catch (e) {
+              applied.failed.push(`split ${u.transactionId}: ${describeError(e)}`);
+            }
+            calls += 1;
           }
-          calls += 1;
-        }
-        store.save();
+          store.save();
+        });
         invalidateBudgetSnapshot(args.budget_id);
       }
+      if (args.apply && plan.updates.length === 0 && args.assign.length) store.save();
       const categories = plan.unknownItems.length > 0
         ? Array.from(model.categories.values())
             .filter((c) => !c.hidden && !model.internalIds.has(c.id))
@@ -273,20 +284,20 @@ export function registerStewardTools(server: McpServer) {
         : [];
       const result = { plan, applied: args.apply ? applied : null, categories, api_calls: calls };
       if (args.format === "json") return jsonResult(result);
-      return textResult(renderEnrich(plan, args.apply ? applied : null, model, calls));
+      return textResult(renderEnrich(plan, args.apply ? applied : null, model, calls), result);
     } catch (e) {
       return errorResult(e);
     }
   }));
 
-  server.registerTool("list_item_categories", {
+  registerTool(server, "list_item_categories", {
     title: "List Remembered Item Categories",
     description: "[0 API calls] The item -> category mappings enrich_transactions has learned.",
     inputSchema: z.object({}),
     annotations: { readOnlyHint: true },
   }, async () => {
     const items = ItemStore.open().list();
-    return textResult(items.length === 0 ? "No item mappings yet." : items.map((i) => `${i.key} (${i.name}) -> ${i.categoryId}`).join("\n"));
+    return textResult(items.length === 0 ? "No item mappings yet." : items.map((i) => `${i.key} (${i.name}) -> ${i.categoryId}`).join("\n"), { items });
   });
 }
 
@@ -310,33 +321,40 @@ interface Applied {
  * the write cap; a failed write stops everything after it.
  */
 async function applyRepairs(budgetId: string, model: BudgetModel, repairs: Repair[], maxWrites: number): Promise<Applied> {
-  const running = new Map<string, number>();
-  const result: Applied = { repairs: 0, writes: 0, failed: [] };
+  let plannedWrites = 0;
   for (const repair of repairs) {
-    if (result.writes + repair.changes.length > maxWrites) {
-      result.stoppedAt = `write cap ${maxWrites} reached before ${repair.kind} ${month7(repair.month)} ${repair.label}`;
-      break;
-    }
-    for (const change of repair.changes) {
-      const key = `${change.categoryId}|${change.month}`;
-      const from = running.get(key) ?? model.monthCategory(change.month, change.categoryId)?.budgeted ?? 0;
-      const to = from + change.delta;
-      try {
-        await getClient().categories.updateMonthCategory(budgetId, change.month, change.categoryId, {
-          category: { budgeted: to },
-        });
-        running.set(key, to);
-        result.writes += 1;
-      } catch (e) {
-        result.writes += 1;
-        result.failed.push(`${month7(change.month)} ${model.categoryLabel(change.categoryId)}: ${describeError(e)}`);
-        result.stoppedAt = `a write failed; re-run to continue`;
-        return result;
-      }
-    }
-    result.repairs += 1;
+    if (plannedWrites + repair.changes.length > maxWrites) break;
+    plannedWrites += repair.changes.length;
   }
-  return result;
+  return apiUsageTracker.withBudget(plannedWrites, async () => {
+    const running = new Map<string, number>();
+    const result: Applied = { repairs: 0, writes: 0, failed: [] };
+    for (const repair of repairs) {
+      if (result.writes + repair.changes.length > maxWrites) {
+        result.stoppedAt = `write cap ${maxWrites} reached before ${repair.kind} ${month7(repair.month)} ${repair.label}`;
+        break;
+      }
+      for (const change of repair.changes) {
+        const key = `${change.categoryId}|${change.month}`;
+        const from = running.get(key) ?? model.monthCategory(change.month, change.categoryId)?.budgeted ?? 0;
+        const to = from + change.delta;
+        try {
+          await getClient().categories.updateMonthCategory(budgetId, change.month, change.categoryId, {
+            category: { budgeted: to },
+          });
+          running.set(key, to);
+          result.writes += 1;
+        } catch (e) {
+          result.writes += 1;
+          result.failed.push(`${month7(change.month)} ${model.categoryLabel(change.categoryId)}: ${describeError(e)}`);
+          result.stoppedAt = `a write failed; outcome may be ambiguous. Inspect current state and preview again before continuing`;
+          return result;
+        }
+      }
+      result.repairs += 1;
+    }
+    return result;
+  });
 }
 
 function renderIntegrity(findings: Findings, plan: RepairPlan, applied: Applied | null, calls: number): string {

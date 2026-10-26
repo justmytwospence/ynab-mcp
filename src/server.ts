@@ -19,6 +19,7 @@ import { registerApiUsageTools } from "./tools/api-usage.js";
 import { registerAmazonTools } from "./tools/amazon.js";
 import { registerResources } from "./resources.js";
 import { registerPrompts } from "./prompts.js";
+import { BUDGET_GUIDANCE } from "./utils/guidance.js";
 
 export const SERVER_NAME = "ynab-mcp";
 export const VERSION: string = createRequire(import.meta.url)("../package.json").version;
@@ -32,14 +33,7 @@ export function createServer(): McpServer {
   const server = new McpServer(
     { name: SERVER_NAME, version: VERSION },
     {
-      instructions:
-        "YNAB API rate limit: 200 requests/hour (sliding window) shared across all tools. " +
-        "Each tool description shows its API call cost in brackets (e.g., [1 API call]). " +
-        "Use get_api_usage to check remaining quota before batch operations. " +
-        "Prefer bulk tools (create_transactions, update_transactions) over repeated single-call tools. " +
-        "The transaction list endpoints return only the last twelve months when since_date is omitted, with no " +
-        "indication that history was truncated. For any analysis spanning more than a year, use get_budget: its " +
-        "full export has no date window and is cached.",
+      instructions: BUDGET_GUIDANCE + " Read ynab://guide for resource costs and partial-coverage semantics. get_budget returns a snapshot summary, not all entities; use bounded templates or scoped transaction tools for details. Status resources and prompt/discovery retrieval are zero-HTTP.",
     }
   );
 

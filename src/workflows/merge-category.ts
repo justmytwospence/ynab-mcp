@@ -1,10 +1,11 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/server";
+import { registerTool } from "../utils/register.js";
 import { textResult, errorResult } from "../utils/formatting.js";
 import { performCategoryMerge } from "./lib/category-merge.js";
 
 export function registerWorkflowTools(server: McpServer) {
-  server.registerTool("merge_category", {
+  registerTool(server, "merge_category", {
     title: "Merge Category",
     description:
       "[1 API call to preview] [Workflow] Merges a source category into a target category: re-categorizes all " +
@@ -42,7 +43,7 @@ export function registerWorkflowTools(server: McpServer) {
           `You can hide or delete it manually in the YNAB app.`;
       }
 
-      return textResult(result.output + trailer);
+      return textResult(result.output + trailer, result);
     } catch (e: any) {
       return errorResult(e);
     }

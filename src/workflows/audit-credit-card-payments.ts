@@ -1,5 +1,7 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/server";
+import { registerTool } from "../utils/register.js";
+import { apiUsageTracker } from "../utils/api-usage.js";
 import type { AccountBase, CategoryBase, TransactionSummaryBase } from "ynab";
 import { getClient } from "../ynab-client.js";
 import { textResult, errorResult, formatCurrency, dollarsToMilliunits } from "../utils/formatting.js";
@@ -54,7 +56,7 @@ interface MonthAudit {
 }
 
 export function registerCreditCardAuditTools(server: McpServer) {
-  server.registerTool("audit_credit_card_payments", {
+  registerTool(server, "audit_credit_card_payments", {
     title: "Audit Credit Card Payments",
     description:
       "[1 API call] [Workflow] Audits credit card and line-of-credit payment categories across every budget month. " +
@@ -127,6 +129,9 @@ export function registerCreditCardAuditTools(server: McpServer) {
       ];
       if (toleranceMilliunits > 0) lines.push(`Tolerance: ${formatCurrency(toleranceMilliunits)}`);
 
+      const cardAudits: Array<{ account_id: string; months: MonthAudit[] }> = [];
+      const applied: string[] = [];
+      const failed: string[] = [];
       const corrections: Correction[] = [];
       const warnings: string[] = [];
       let totalResidualMonths = 0;
@@ -254,6 +259,7 @@ export function registerCreditCardAuditTools(server: McpServer) {
           }
         }
 
+        cardAudits.push({ account_id: card.id, months: audits });
         lines.push(...renderCard(audits, toleranceMilliunits, verbose));
       }
 
@@ -283,22 +289,21 @@ export function registerCreditCardAuditTools(server: McpServer) {
 
       if (apply && affordable.length > 0) {
         lines.push(``, `Applying ${affordable.length} correction(s)...`);
-        const applied: string[] = [];
-        const failed: string[] = [];
-
-        for (const c of affordable) {
-          try {
-            await getClient().categories.updateMonthCategory(budget_id, c.month, c.categoryId, {
-              category: { budgeted: c.budgeted },
-            });
-            applied.push(`${c.month} (${c.cardName}): assigned ${formatCurrency(c.budgeted)}`);
-          } catch (e: unknown) {
-            // Keep going: a failure part way through must not hide which months
-            // were already rewritten.
-            failed.push(`${c.month} (${c.cardName}): ${describeError(e)}`);
+        await apiUsageTracker.withBudget(affordable.length, async () => {
+          for (const c of affordable) {
+            try {
+              await getClient().categories.updateMonthCategory(budget_id, c.month, c.categoryId, {
+                category: { budgeted: c.budgeted },
+              });
+              applied.push(`${c.month} (${c.cardName}): assigned ${formatCurrency(c.budgeted)}`);
+            } catch (e: unknown) {
+              failed.push(`${c.month} (${c.cardName}): ${describeError(e)}. Outcome may be ambiguous; inspect before retrying.`);
+              apiCalls += 1;
+              break;
+            }
+            apiCalls += 1;
           }
-          apiCalls += 1;
-        }
+        });
 
         invalidateBudgetSnapshot(budget_id);
         lines.push(`Applied ${applied.length} of ${affordable.length}:`);
@@ -306,7 +311,7 @@ export function registerCreditCardAuditTools(server: McpServer) {
         if (failed.length > 0) {
           lines.push(`Not applied (${failed.length}):`);
           for (const f of failed) lines.push(`  ${f}`);
-          lines.push(`Months not listed as applied were left unchanged. Re-run to retry.`);
+          lines.push(`Later writes were stopped. Inspect current assignments and preview again before continuing.`);
         }
       } else if (affordable.length > 0) {
         lines.push(
@@ -323,7 +328,7 @@ export function registerCreditCardAuditTools(server: McpServer) {
         `API calls used: ${apiCalls}`
       );
 
-      return textResult(lines.join("\n"));
+      return textResult(lines.join("\n"), { cards: cardAudits, corrections, blocked, warnings, applied, failed });
     } catch (e: any) {
       return errorResult(e);
     }

@@ -1,4 +1,5 @@
-import { getClient } from "../../ynab-client.js";
+import { getClient, transactionUpdateCost } from "../../ynab-client.js";
+import { apiUsageTracker } from "../../utils/api-usage.js";
 import { formatCurrency } from "../../utils/formatting.js";
 import { describeError } from "../../utils/errors.js";
 import {
@@ -24,7 +25,7 @@ export interface MergeResult {
   uninspectedOldMonths: number;
   /** Split legs the API cannot re-categorize; always left in place. */
   splitLegs: number;
-  /** Writes that failed and were left unchanged, as human-readable reasons. */
+  /** Failed writes; a lost response may mean a partial/ambiguous outcome. */
   failures: string[];
 }
 
@@ -129,7 +130,8 @@ export async function performCategoryMerge(
     });
   }
 
-  const writeCalls = (transactions.length > 0 ? 1 : 0) + monthsToAdjust.length * 2;
+  const transactionCalls = transactions.length > 0 ? transactionUpdateCost() : 0;
+  const writeCalls = transactionCalls + monthsToAdjust.length * 2;
 
   const splitLines = (indent: string) =>
     splitLegs.map((leg) => {
@@ -180,7 +182,7 @@ export async function performCategoryMerge(
     }
 
     lines.push(`API calls used: ${apiCalls}`);
-    lines.push(`Additional calls needed to execute: ${transactions.length > 0 ? 1 : 0} (transactions) + ${monthsToAdjust.length * 2} (budget updates) = ${writeCalls}`);
+    lines.push(`Additional calls needed to execute (maximum, including possible flag follow-up): ${transactionCalls} (transactions) + ${monthsToAdjust.length * 2} (budget updates) = ${writeCalls}`);
 
     return {
       output: lines.join("\n"),
@@ -199,90 +201,93 @@ export async function performCategoryMerge(
     };
   }
 
-  // Execute: re-categorize whole transactions.
-  const failures: string[] = [];
-  let transactionsMoved = 0;
-  if (transactions.length > 0) {
-    try {
-      await getClient().transactions.updateTransactions(budgetId, {
-        transactions: transactions.map((t) => ({
-          id: t.id,
-          category_id: targetCategoryId,
-        })),
-      });
-      transactionsMoved = transactions.length;
-    } catch (e: unknown) {
-      failures.push(`transactions: ${describeError(e)}`);
+  return apiUsageTracker.withBudget(writeCalls, async () => {
+    // Execute: re-categorize whole transactions.
+    const failures: string[] = [];
+    let transactionsMoved = 0;
+    if (transactions.length > 0) {
+      try {
+        await getClient().transactions.updateTransactions(budgetId, {
+          transactions: transactions.map((t) => ({
+            id: t.id,
+            category_id: targetCategoryId,
+          })),
+        });
+        transactionsMoved = transactions.length;
+      } catch (e: unknown) {
+        failures.push(`transactions: ${describeError(e)}`);
+      }
+      apiCalls += 1;
     }
-    apiCalls += 1;
-  }
 
-  // Execute: move budgeted amounts, one month at a time. A failure part way
-  // through leaves earlier months already written, so record exactly which
-  // months landed rather than throwing the whole result away.
-  let monthsAdjusted = 0;
-  for (const m of monthsToAdjust) {
-    try {
-      await getClient().categories.updateMonthCategory(
-        budgetId, m.month, targetCategoryId,
-        { category: { budgeted: m.targetBudgeted + m.sourceBudgeted } }
-      );
-      apiCalls += 1;
-      await getClient().categories.updateMonthCategory(
-        budgetId, m.month, sourceCategoryId,
-        { category: { budgeted: 0 } }
-      );
-      apiCalls += 1;
-      monthsAdjusted += 1;
-    } catch (e: unknown) {
-      apiCalls += 1;
-      failures.push(`${m.month}: ${describeError(e)}`);
+    // Execute: move budgeted amounts, one month at a time. A failure part way
+    // through leaves earlier months already written, so record exactly which
+    // months landed rather than throwing the whole result away.
+    let monthsAdjusted = 0;
+    for (const m of monthsToAdjust) {
+      if (failures.length) break; // Do not compound an ambiguous earlier mutation.
+      try {
+        await getClient().categories.updateMonthCategory(
+          budgetId, m.month, targetCategoryId,
+          { category: { budgeted: m.targetBudgeted + m.sourceBudgeted } }
+        );
+        apiCalls += 1;
+        await getClient().categories.updateMonthCategory(
+          budgetId, m.month, sourceCategoryId,
+          { category: { budgeted: 0 } }
+        );
+        apiCalls += 1;
+        monthsAdjusted += 1;
+      } catch (e: unknown) {
+        apiCalls += 1;
+        failures.push(`${m.month}: ${describeError(e)}`);
+      }
     }
-  }
 
-  invalidateBudgetSnapshot(budgetId);
+    invalidateBudgetSnapshot(budgetId);
 
-  const lines = [
-    `Merged "${sourceCat.name}" -> "${targetCat.name}"`,
-    ``,
-    `Transactions re-categorized: ${transactionsMoved} of ${transactions.length}`,
-    `Monthly budgets adjusted: ${monthsAdjusted} of ${monthsToAdjust.length}`,
-  ];
-  if (skipNote) lines.push(skipNote);
-  lines.push(`Total API calls used: ${apiCalls}`);
-
-  if (splitLegs.length > 0) {
-    lines.push(
+    const lines = [
+      `Merged "${sourceCat.name}" -> "${targetCat.name}"`,
       ``,
-      `Not moved: ${splitLegs.length} split transaction leg(s), which the API cannot re-categorize.`,
-      `Re-categorize these in the YNAB app:`,
-      ...splitLines("  ")
-    );
-  }
+      `Transactions re-categorized: ${transactionsMoved} of ${transactions.length}`,
+      `Monthly budgets adjusted: ${monthsAdjusted} of ${monthsToAdjust.length}`,
+    ];
+    if (skipNote) lines.push(skipNote);
+    lines.push(`Total API calls used: ${apiCalls}`);
 
-  if (failures.length > 0) {
-    lines.push(
-      ``,
-      `${failures.length} operation(s) failed and were left unchanged:`,
-      ...failures.map((f) => `  - ${f}`),
-      ``,
-      `Everything not listed above was applied. Re-run to retry the failures.`
-    );
-  }
+    if (splitLegs.length > 0) {
+      lines.push(
+        ``,
+        `Not moved: ${splitLegs.length} split transaction leg(s), which the API cannot re-categorize.`,
+        `Re-categorize these in the YNAB app:`,
+        ...splitLines("  ")
+      );
+    }
 
-  return {
-    output: lines.join("\n"),
-    apiCalls,
-    executed: true,
-    sourceName: sourceCat.name,
-    targetName: targetCat.name,
-    transactionsMoved,
-    monthsAdjusted,
-    transactionsTotal: transactions.length,
-    monthsTotal: monthsToAdjust.length,
-    skippedTransactions,
-    uninspectedOldMonths,
-    splitLegs: splitLegs.length,
-    failures,
-  };
+    if (failures.length > 0) {
+      lines.push(
+        ``,
+        `${failures.length} operation(s) failed; outcomes may be ambiguous or partially applied:`,
+        ...failures.map((f) => `  - ${f}`),
+        ``,
+        `Later operations were stopped. Inspect current transactions and both category budgets before previewing again; do not replay a lost write blindly.`
+      );
+    }
+
+    return {
+      output: lines.join("\n"),
+      apiCalls,
+      executed: true,
+      sourceName: sourceCat.name,
+      targetName: targetCat.name,
+      transactionsMoved,
+      monthsAdjusted,
+      transactionsTotal: transactions.length,
+      monthsTotal: monthsToAdjust.length,
+      skippedTransactions,
+      uninspectedOldMonths,
+      splitLegs: splitLegs.length,
+      failures,
+    };
+  });
 }

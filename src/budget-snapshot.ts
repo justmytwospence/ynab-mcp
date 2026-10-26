@@ -1,7 +1,9 @@
 import type { AccountBase, CategoryBase, PlanDetail, TransactionSummaryBase } from "ynab";
 import { getClient } from "./ynab-client.js";
-import { errorStatus, isYnabApiError } from "./utils/errors.js";
+import { errorStatus } from "./utils/errors.js";
 import { setActiveCurrencyFormat } from "./utils/formatting.js";
+import { apiUsageTracker } from "./utils/api-usage.js";
+import { inOperation, operationUsage, runOperation } from "./utils/operation.js";
 
 /**
  * A cached full budget export.
@@ -13,7 +15,7 @@ import { setActiveCurrencyFormat } from "./utils/formatting.js";
  * cost one delta call.
  */
 export interface BudgetSnapshot {
-  /** The budget's real id (never the "last-used" alias). */
+  /** Real id from a full export, or the requested alias in a piecewise fallback. */
   budgetId: string;
   plan: PlanDetail;
   /**
@@ -133,6 +135,15 @@ export async function getBudgetSnapshot(
   budgetId: string,
   options: GetSnapshotOptions = {}
 ): Promise<SnapshotResult> {
+  const fetchSnapshot = async () => {
+    const before = operationUsage().attempts;
+    const result = await fetchBudgetSnapshot(budgetId, options);
+    return { ...result, apiCalls: operationUsage().attempts - before };
+  };
+  return inOperation() ? fetchSnapshot() : runOperation(fetchSnapshot);
+}
+
+async function fetchBudgetSnapshot(budgetId: string, options: GetSnapshotOptions): Promise<SnapshotResult> {
   const { maxAgeMs = 0, forceFull = false } = options;
   const cached = forceFull ? undefined : cache.get(budgetId);
 
@@ -143,9 +154,13 @@ export async function getBudgetSnapshot(
   let apiCalls = 0;
   let refetchedInFull = false;
 
-  // A piecewise snapshot has no plan-level knowledge value to delta against,
-  // and asking for one reissues the very request that timed out.
-  if (cached && !cached.assembledPiecewise) {
+  // Reuse the fallback strategy rather than knowingly repeating a timed-out full export.
+  if (cached?.assembledPiecewise) {
+    const assembled = await assemblePiecewise(budgetId);
+    store(budgetId, assembled.snapshot);
+    return { ...assembled, refetchedInFull: false };
+  }
+  if (cached) {
     // A delta is small, but the endpoint is the same one that can time out on
     // a large budget, so a 503 here falls through to the fallback below rather
     // than escaping to the caller.
@@ -158,7 +173,7 @@ export async function getBudgetSnapshot(
         // the deserializer before deltaIsMergeable can inspect it. A delta that
         // cannot be parsed is a delta that cannot be merged: fall through to a
         // full refetch. Genuine API errors (401, 403, 429) still propagate.
-        if (!isYnabApiError(e)) return null;
+        if (e instanceof TypeError) return null;
         throw e;
       });
     apiCalls += 1;
@@ -177,12 +192,8 @@ export async function getBudgetSnapshot(
   }
 
   try {
-    const response = await withRetryOn500(
-      () => getClient().plans.getPlanById(budgetId),
-      () => {
-        apiCalls += 1;
-      }
-    );
+    // The shared transport handles bounded read backoff; do not layer retries.
+    const response = await getClient().plans.getPlanById(budgetId);
     apiCalls += 1;
     const snapshot: BudgetSnapshot = {
       budgetId: response.data.plan.id,
@@ -222,45 +233,57 @@ async function assemblePiecewise(budgetId: string): Promise<{ snapshot: BudgetSn
   const client = getClient();
   let apiCalls = 0;
 
-  const [settings, accountsRes, categoriesRes, monthsRes, payeesRes] = await Promise.all([
-    client.plans.getPlanSettingsById(budgetId),
-    client.accounts.getAccounts(budgetId),
-    client.categories.getCategories(budgetId),
-    client.months.getPlanMonths(budgetId),
-    // Payees are not decoration here: the audit identifies pre-YNAB debt by the
-    // "Starting Balance" payee, and without them it silently stops attributing
-    // starting-balance debt and reports it as unexplained drift.
-    client.payees.getPayees(budgetId),
-  ]);
+  // Five discovery calls, then preflight the now-known M + Y phase. Reservations
+  // prevent competing invocations consuming these slots before this phase starts.
+  const [settings, accountsRes, categoriesRes, monthsRes, payeesRes] = await apiUsageTracker.withBudget(5, async () => {
+    const results = await Promise.allSettled([
+      client.plans.getPlanSettingsById(budgetId),
+      client.accounts.getAccounts(budgetId),
+      client.categories.getCategories(budgetId),
+      client.months.getPlanMonths(budgetId),
+      // Payees are not decoration here: the audit identifies pre-YNAB debt by the
+      // "Starting Balance" payee, and without them it silently stops attributing
+      // starting-balance debt and reports it as unexplained drift.
+      client.payees.getPayees(budgetId),
+    ] as const);
+    return results.map(result => {
+      if (result.status === "rejected") throw result.reason;
+      return result.value;
+    }) as [Awaited<ReturnType<typeof client.plans.getPlanSettingsById>>, Awaited<ReturnType<typeof client.accounts.getAccounts>>, Awaited<ReturnType<typeof client.categories.getCategories>>, Awaited<ReturnType<typeof client.months.getPlanMonths>>, Awaited<ReturnType<typeof client.payees.getPayees>>];
+  });
   apiCalls += 5;
 
-  const monthSummaries = monthsRes.data.months.filter((m) => !m.deleted);
-  const monthDetails = [];
-  for (const summary of monthSummaries) {
-    monthDetails.push((await client.months.getPlanMonth(budgetId, summary.month)).data.month);
-    apiCalls += 1;
-  }
-
+  const monthSummaries = monthsRes.data.months.filter((m) => !m.deleted).sort((a, b) => a.month.localeCompare(b.month));
   const firstMonth = monthSummaries[0]?.month ?? `${new Date().getFullYear()}-01-01`;
+  const windows = yearWindows(firstMonth);
+  const monthDetails: MonthEntry[] = [];
   const transactions: TransactionSummaryBase[] = [];
   const subtransactions: PlanDetail["subtransactions"] = [];
-  const seen = new Set<string>();
-  for (const [since, until] of yearWindows(firstMonth)) {
-    const res = await client.transactions.getTransactionsRaw({
-      planId: budgetId,
-      sinceDate: since,
-      untilDate: until,
-    }).then((r) => r.value());
-    apiCalls += 1;
-    for (const t of res.data.transactions) {
-      // since_date and until_date are both inclusive, so consecutive windows
-      // share their boundary date and return the same transaction twice.
-      if (seen.has(t.id)) continue;
-      seen.add(t.id);
-      transactions.push(t);
-      for (const leg of t.subtransactions ?? []) subtransactions.push(leg);
+  await apiUsageTracker.withBudget(monthSummaries.length + windows.length, async () => {
+    for (const summary of monthSummaries) {
+      monthDetails.push((await client.months.getPlanMonth(budgetId, summary.month)).data.month);
+      apiCalls += 1;
     }
-  }
+
+    const seen = new Set<string>();
+    for (const [since, until] of windows) {
+      const res = await client.transactions.getTransactionsRaw({
+        planId: budgetId,
+        sinceDate: since,
+        untilDate: until,
+      }).then((r) => r.value());
+      apiCalls += 1;
+      for (const t of res.data.transactions) {
+        // since_date and until_date are both inclusive, so consecutive windows
+        // share their boundary date and return the same transaction twice.
+        if (seen.has(t.id)) continue;
+        seen.add(t.id);
+        transactions.push(t);
+        for (const leg of t.subtransactions ?? []) subtransactions.push(leg);
+      }
+    }
+
+  });
 
   const categories: CategoryBase[] = categoriesRes.data.category_groups.flatMap((g) => g.categories);
   const accounts: AccountBase[] = accountsRes.data.accounts;
@@ -296,31 +319,6 @@ async function assemblePiecewise(budgetId: string): Promise<{ snapshot: BudgetSn
   };
 }
 
-/**
- * Retry a full export that failed with a 500.
- *
- * Observed live: the first full export of a large budget fails with a bare
- * internal_server_error, and the identical request succeeds seconds later
- * (YNAB appears to warm something). A 503 is a timeout and handled by the
- * piecewise fallback instead; anything else propagates.
- */
-export async function withRetryOn500<T>(
-  request: () => Promise<T>,
-  onFailedAttempt: () => void,
-  attempts = 3,
-  delayMs = 2000
-): Promise<T> {
-  for (let attempt = 1; ; attempt++) {
-    try {
-      return await request();
-    } catch (e: unknown) {
-      if (errorStatus(e) !== 500 || attempt >= attempts) throw e;
-      onFailedAttempt();
-      await new Promise((resolve) => setTimeout(resolve, delayMs * attempt));
-    }
-  }
-}
-
 /** [since, until] date pairs covering firstMonth through today, a year at a time. */
 function yearWindows(firstMonth: string): Array<[string, string]> {
   const windows: Array<[string, string]> = [];
@@ -341,6 +339,11 @@ function store(requestedId: string, snapshot: BudgetSnapshot) {
   setActiveCurrencyFormat(snapshot.plan.currency_format);
   cache.set(requestedId, snapshot);
   cache.set(snapshot.budgetId, snapshot);
+}
+
+/** Zero-I/O cache metadata for status; never expose full financial payloads here. */
+export function snapshotCacheStatus() {
+  return [...new Set(cache.values())].map(s => ({ budgetId: s.budgetId, fetchedAt: new Date(s.fetchedAt).toISOString(), assembledPiecewise: s.assembledPiecewise, serverKnowledge: s.serverKnowledge }));
 }
 
 /** Drop cached snapshots, e.g. after a write that invalidates them. */

@@ -1,5 +1,8 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/server";
+import { registerTool } from "../utils/register.js";
+import { apiUsageTracker } from "../utils/api-usage.js";
+import { operationWarning } from "../utils/operation.js";
 import { getClient } from "../ynab-client.js";
 import { textResult, errorResult, formatCurrency, dollarsToMilliunits } from "../utils/formatting.js";
 import { getReconciliationAnchor } from "./lib/reconciliation.js";
@@ -7,7 +10,7 @@ import { getReconciliationAnchor } from "./lib/reconciliation.js";
 const RECONCILE_ADJUSTMENT_PAYEE = "Reconciliation Balance Adjustment";
 
 export function registerAccountReconciliationAuditTool(server: McpServer) {
-  server.registerTool("audit_account_reconciliation", {
+  registerTool(server, "audit_account_reconciliation", {
     title: "Audit Account Reconciliation",
     description:
       "[2-4 API calls] [Workflow] Audit an account's reconciliation state. " +
@@ -32,8 +35,10 @@ export function registerAccountReconciliationAuditTool(server: McpServer) {
     }),
     annotations: { readOnlyHint: false },
   }, async ({ budget_id, account_id, target_balance, apply }) => {
+    const completed: string[] = [];
     try {
       let apiCalls = 0;
+      apiUsageTracker.assertAvailable(2);
 
       const accountRes = await getClient().accounts.getAccountById(budget_id, account_id);
       apiCalls += 1;
@@ -109,41 +114,46 @@ export function registerAccountReconciliationAuditTool(server: McpServer) {
         lines.push(``);
         lines.push(`Applying reconciliation...`);
 
-        if (targetMilli !== null && discrepancy !== null && discrepancy !== 0) {
-          // Bank shows a balance different from YNAB cleared. Create an adjustment for the gap.
-          // The adjustment amount should make YNAB match the bank:
-          //   new_cleared = cleared + adjustment = target => adjustment = target - cleared = -discrepancy
-          const adjustmentAmount = -discrepancy;
-          await getClient().transactions.createTransaction(budget_id, {
-            transaction: {
-              account_id,
-              date: new Date().toISOString().slice(0, 10),
-              amount: adjustmentAmount,
-              payee_name: RECONCILE_ADJUSTMENT_PAYEE,
-              memo: "Created by audit_account_reconciliation",
-              cleared: "reconciled",
-              approved: true,
-            },
-          });
-          apiCalls += 1;
-          lines.push(
-            `  Created Reconciliation Balance Adjustment: ${formatCurrency(adjustmentAmount)} ` +
-            `(brings YNAB cleared to ${formatCurrency(targetMilli)})`
-          );
-        }
+        const writes = (targetMilli !== null && discrepancy !== null && discrepancy !== 0 ? 1 : 0) + (anchor.unreconciledTransactions.length ? 1 : 0);
+        await apiUsageTracker.withBudget(writes, async () => {
+          if (targetMilli !== null && discrepancy !== null && discrepancy !== 0) {
+            // Bank shows a balance different from YNAB cleared. Create an adjustment for the gap.
+            // The adjustment amount should make YNAB match the bank:
+            //   new_cleared = cleared + adjustment = target => adjustment = target - cleared = -discrepancy
+            const adjustmentAmount = -discrepancy;
+            await getClient().transactions.createTransaction(budget_id, {
+              transaction: {
+                account_id,
+                date: new Date().toISOString().slice(0, 10),
+                amount: adjustmentAmount,
+                payee_name: RECONCILE_ADJUSTMENT_PAYEE,
+                memo: "Created by audit_account_reconciliation",
+                cleared: "reconciled",
+                approved: true,
+              },
+            });
+            apiCalls += 1;
+            completed.push("Created reconciliation balance adjustment");
+            lines.push(
+              `  Created Reconciliation Balance Adjustment: ${formatCurrency(adjustmentAmount)} ` +
+              `(brings YNAB cleared to ${formatCurrency(targetMilli)})`
+            );
+          }
 
-        if (anchor.unreconciledTransactions.length > 0) {
-          await getClient().transactions.updateTransactions(budget_id, {
-            transactions: anchor.unreconciledTransactions.map((t) => ({
-              id: t.id,
-              cleared: "reconciled",
-            })),
-          });
-          apiCalls += 1;
-          lines.push(`  Marked ${anchor.unreconciledTransactions.length} transaction(s) as reconciled.`);
-        } else if (targetMilli === null || discrepancy === 0) {
-          lines.push(`  Nothing to do — no unreconciled cleared transactions and no discrepancy.`);
-        }
+          if (anchor.unreconciledTransactions.length > 0) {
+            await getClient().transactions.updateTransactions(budget_id, {
+              transactions: anchor.unreconciledTransactions.map((t) => ({
+                id: t.id,
+                cleared: "reconciled",
+              })),
+            });
+            apiCalls += 1;
+            completed.push(`Reconciled ${anchor.unreconciledTransactions.length} transactions`);
+            lines.push(`  Marked ${anchor.unreconciledTransactions.length} transaction(s) as reconciled.`);
+          } else if (targetMilli === null || discrepancy === 0) {
+            lines.push(`  Nothing to do — no unreconciled cleared transactions and no discrepancy.`);
+          }
+        });
       } else {
         const apply_eligible =
           anchor.unreconciledTransactions.length > 0 ||
@@ -162,8 +172,9 @@ export function registerAccountReconciliationAuditTool(server: McpServer) {
       lines.push(``);
       lines.push(`API calls used: ${apiCalls}`);
 
-      return textResult(lines.join("\n"));
+      return textResult(lines.join("\n"), { account, anchor, target_balance_milliunits: targetMilli, discrepancy, completed });
     } catch (e: any) {
+      if (apply) operationWarning(`Completed: ${completed.join("; ") || "none confirmed"}. A failed write may have applied; inspect current state before continuing reconciliation.`);
       return errorResult(e);
     }
   });

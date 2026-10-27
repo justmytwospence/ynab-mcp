@@ -1,7 +1,8 @@
 import type { TransactionDetail } from "ynab";
 import { getClient } from "../../ynab-client.js";
 
-const RECONCILE_ADJUSTMENT_PAYEE = "Reconciliation Balance Adjustment";
+// YNAB's own reconcile adjustment for tracking accounts is "Market return".
+const ADJUSTMENT_PAYEES = new Set(["Reconciliation Balance Adjustment", "Market return"]);
 
 export interface ReconciliationAnchor {
   lastReconciledDate: string | null;
@@ -46,7 +47,7 @@ export async function getReconciliationAnchor(
       if (latestReconciledDate === null || t.date > latestReconciledDate) {
         latestReconciledDate = t.date;
       }
-      if (t.payee_name === RECONCILE_ADJUSTMENT_PAYEE) {
+      if (t.payee_name && ADJUSTMENT_PAYEES.has(t.payee_name)) {
         if (latestAdjustmentDate === null || t.date > latestAdjustmentDate) {
           latestAdjustmentDate = t.date;
         }

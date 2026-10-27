@@ -28,6 +28,8 @@ at `http://<host>:8000/mcp` (also at `/`), with a health check at `/health`, and
 | `MCP_TRANSPORT` | `stdio` (`http` in the image) | `stdio` or `http` |
 | `PORT` | `8000` | HTTP port |
 | `AMAZON_ORDERS_URL`, `AMAZON_ORDERS_TOKEN` | (unset) | An amazon-orders service (see the homelab repo); enables `amazon_order` and `amazon_receipts` |
+| `RECONCILE_MAP` | (unset) | Where each tracking account's real balance comes from; enables `get_tracking_balances`. See [Tracking balances](#tracking-balances) |
+| `PLAID_CLIENT_ID`, `PLAID_SECRET`, `PLAID_TOKENS`, `PLAID_ENV` | (unset), `production` | Read-only Plaid access for investment accounts in `RECONCILE_MAP` |
 | `YNAB_MCP_AI_FLAG` | (unset: off) | A flag color (`purple`, ...) put on every transaction this server creates or edits; see "AI flag" |
 | `YNAB_MCP_STATE_DIR` | `./state` (`/data` in the image) | Where enrich_transactions remembers item categories; mount a volume |
 | `MCP_ALLOWED_HOSTS` | (any) | Comma-separated hostnames allowed in the `Host` header (set it behind a reverse proxy) |
@@ -109,6 +111,43 @@ name the flag (e.g. "AI") and filter by it; through the server, pass `flag: "ai"
   (named the category, picked one of your options). Nothing is marked, and an AI flag already
   on an edited transaction is cleared (one extra call), since a person has now decided it.
   Their own flag colors are kept.
+
+### Tracking balances
+
+`get_tracking_balances` (read-only) reads the real balance of each tracking account named in
+`RECONCILE_MAP` and compares it with YNAB's cleared balance. Book the difference with
+`audit_account_reconciliation` (`target_balance`, `apply: true`, `payee_name: "Market return"`),
+which reconciles the account the way YNAB's own reconcile does.
+
+```json
+[
+  {"account": "Roth", "plaid": {"link": "vanguard", "masks": ["1234"]}},
+  {"account": "Crypto", "wallets": [
+    {"chain": "btc", "address": "zpub..."},
+    {"chain": "eth", "address": "0x..."},
+    {"chain": "eth", "address": "0x...", "token": {"contract": "0xA0b8...", "decimals": 6, "coingecko": "usd-coin", "symbol": "USDC"}},
+    {"chain": "sol", "address": "..."}
+  ]}
+]
+```
+
+**Crypto** uses public data only: mempool.space (BTC address), blockchain.info (BTC
+xpub/ypub/zpub; it learns the wallet's addresses), a public Ethereum RPC, Solana's public RPC,
+and CoinGecko prices. Nothing here can sign or move funds.
+
+**Investment accounts** use Plaid's free Trial plan, read-only:
+
+- The server can call exactly two Plaid endpoints, `/investments/holdings/get` and
+  `/accounts/get` (enforced in `src/sources/plaid.ts` and tested). Plaid has no endpoint that
+  trades or withdraws from an investment account.
+- Links are made with `node dist/plaid-link.js link` in the container. It asks Plaid for
+  `investments` only, then keeps the link only if the institution uses OAuth (Plaid never sees
+  your password), the link consents to nothing beyond investments, and `/auth/get` (account and
+  routing numbers) and `/identity/get` are refused. Otherwise it removes the link. `search <name>`
+  shows whether an institution links through OAuth before you try.
+- `PLAID_TOKENS` is a JSON object of link name to access token. Keep it with the YNAB token;
+  errors never include it. Revoke a link at my.plaid.com or at the institution (Fidelity
+  Access), or rotate `PLAID_SECRET` in the Plaid dashboard to cut off every link at once.
 
 ### Rate limit awareness
 

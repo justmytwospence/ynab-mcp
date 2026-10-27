@@ -32,9 +32,14 @@ export function registerAccountReconciliationAuditTool(server: McpServer) {
         "when target_balance != cleared_balance, creates a Reconciliation Balance Adjustment for the gap. " +
         "Default: false (audit only)."
       ),
+      payee_name: z.string().min(1).optional().describe(
+        "Payee for the adjustment (default \"Reconciliation Balance Adjustment\"). For investment tracking " +
+        "accounts use \"Market return\"."
+      ),
+      memo: z.string().max(500).optional().describe("Memo for the adjustment (default \"Created by audit_account_reconciliation\")."),
     }),
     annotations: { readOnlyHint: false },
-  }, async ({ budget_id, account_id, target_balance, apply }) => {
+  }, async ({ budget_id, account_id, target_balance, apply, payee_name, memo }) => {
     const completed: string[] = [];
     try {
       let apiCalls = 0;
@@ -126,8 +131,8 @@ export function registerAccountReconciliationAuditTool(server: McpServer) {
                 account_id,
                 date: new Date().toISOString().slice(0, 10),
                 amount: adjustmentAmount,
-                payee_name: RECONCILE_ADJUSTMENT_PAYEE,
-                memo: "Created by audit_account_reconciliation",
+                payee_name: payee_name ?? RECONCILE_ADJUSTMENT_PAYEE,
+                memo: memo ?? "Created by audit_account_reconciliation",
                 cleared: "reconciled",
                 approved: true,
               },
@@ -135,7 +140,7 @@ export function registerAccountReconciliationAuditTool(server: McpServer) {
             apiCalls += 1;
             completed.push("Created reconciliation balance adjustment");
             lines.push(
-              `  Created Reconciliation Balance Adjustment: ${formatCurrency(adjustmentAmount)} ` +
+              `  Created ${payee_name ?? RECONCILE_ADJUSTMENT_PAYEE} adjustment: ${formatCurrency(adjustmentAmount)} ` +
               `(brings YNAB cleared to ${formatCurrency(targetMilli)})`
             );
           }

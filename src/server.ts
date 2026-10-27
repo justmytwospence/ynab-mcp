@@ -17,6 +17,7 @@ import { registerAccountReconciliationAuditTool } from "./workflows/audit-accoun
 import { registerStewardTools } from "./workflows/steward.js";
 import { registerApiUsageTools } from "./tools/api-usage.js";
 import { registerAmazonTools } from "./tools/amazon.js";
+import { registerTrackingBalanceTools } from "./tools/tracking-balances.js";
 import { registerResources } from "./resources.js";
 import { registerPrompts } from "./prompts.js";
 import { BUDGET_GUIDANCE } from "./utils/guidance.js";
@@ -53,6 +54,7 @@ export function createServer(): McpServer {
   registerAccountReconciliationAuditTool(server);
   registerStewardTools(server);
   registerAmazonTools(server);
+  registerTrackingBalanceTools(server);
   registerApiUsageTools(server);
   registerResources(server);
   registerPrompts(server);

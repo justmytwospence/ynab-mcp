@@ -1,3 +1,5 @@
+import { causeChain, YnabTransportError } from "./api-usage.js";
+
 /**
  * YNAB error handling.
  *
@@ -50,6 +52,13 @@ export function describeError(e: unknown): string {
     }
     return `${detail} (${name}, ${id})`;
   }
-  if (e instanceof Error) return e.message;
+  if (e instanceof Error) {
+    // The SDK wraps a thrown fetch in FetchError, whose own message ("The request failed
+    // and the interceptors did not return an alternative response") says nothing.
+    if (e.name === "FetchError" && e.cause !== undefined) return describeError(e.cause);
+    if (e instanceof YnabTransportError) return e.message;
+    const causes = causeChain(e.cause);
+    return causes.length ? `${e.message} (${causes.join(": ")})` : e.message;
+  }
   return String(e);
 }

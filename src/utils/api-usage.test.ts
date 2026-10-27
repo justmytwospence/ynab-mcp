@@ -1,6 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
-import { ApiUsageTracker, retryAfterMs } from "./api-usage.js";
+import { ApiUsageTracker, retryAfterMs, YnabTransportError } from "./api-usage.js";
+import { describeError } from "./errors.js";
 import { withAiFlag } from "./ai-flag.js";
 import { operationUsage, runOperation } from "./operation.js";
 
@@ -197,4 +198,31 @@ test("per-operation costs do not include other overlapping invocations", async (
   })));
   assert.deepEqual(counts, [1, 3]);
   assert.equal(tracker.getUsage().used, 4);
+});
+
+test("transport failures say which request failed, how, and whether it is safe to retry", async () => {
+  const plan = "https://api.ynab.com/v1/plans/0f8e2c1a-1234-4abc-9def-0123456789ab/months";
+  const socket = Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" });
+  const refused = new ApiUsageTracker({ fetch: async () => { throw new TypeError("fetch failed", { cause: socket }); } });
+  const before = await refused.wrappedFetch(plan).catch(e => e);
+  assert.ok(before instanceof YnabTransportError);
+  assert.equal(before.status, null);
+  assert.match(before.message, /^YNAB GET \/plans\/\{id\}\/months: the connection failed after \d+\.\d s, before YNAB answered \(fetch failed: other side closed \(UND_ERR_SOCKET\)\)\./);
+  assert.match(before.message, /safe to retry/);
+
+  const cut = new ApiUsageTracker({ fetch: async () => new Response(new ReadableStream({
+    start(controller) { controller.enqueue(new TextEncoder().encode("{")); controller.error(new TypeError("terminated", { cause: socket })); },
+  }), { status: 200 }) });
+  const during = await cut.wrappedFetch(plan, { method: "PATCH" }).catch(e => e);
+  assert.ok(during instanceof YnabTransportError);
+  assert.match(during.message, /YNAB PATCH \/plans\/\{id\}\/months: YNAB answered 200, but the connection dropped .* while the response was still downloading \(terminated: other side closed \(UND_ERR_SOCKET\)\)/);
+  assert.match(during.message, /may or may not have applied it/);
+
+  const slow = new ApiUsageTracker({ fetch: async () => { throw new DOMException("The operation was aborted due to timeout", "TimeoutError"); } });
+  assert.match((await slow.wrappedFetch(plan).catch(e => e)).message, /no response within 45 s/);
+
+  // What the SDK throws on a failed fetch: a FetchError carrying ours as its cause.
+  const sdk = Object.assign(new Error("The request failed and the interceptors did not return an alternative response"), { name: "FetchError", cause: before });
+  assert.equal(describeError(sdk), before.message);
+  assert.equal(describeError(new Error("outer", { cause: socket })), "outer (other side closed (UND_ERR_SOCKET))");
 });

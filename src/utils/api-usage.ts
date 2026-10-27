@@ -91,11 +91,28 @@ export class ApiUsageTracker {
         this.calls.push(this.now());
         recordAttempt(method); // Every real attempt, including failed transport and flag follow-ups.
         const signal = init?.signal ?? (input instanceof Request ? input.signal : undefined);
-        response = await this.transport(input, {
-          ...init,
-          signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(45000)]) : AbortSignal.timeout(45000),
-        });
-        this.lastResponseAt = this.now();
+        const started = this.now();
+        let status: number | null = null;
+        try {
+          response = await this.transport(input, {
+            ...init,
+            signal: signal ? AbortSignal.any([signal, AbortSignal.timeout(45000)]) : AbortSignal.timeout(45000),
+          });
+          this.lastResponseAt = this.now();
+          status = response.status;
+          // Hold the permit through body transfer, not merely until response headers.
+          // This also makes the timeout cover SDK JSON reads and avoids unbounded
+          // concurrent export streams after fetch() resolves.
+          const body = await response.arrayBuffer();
+          response = new Response([204, 205, 304].includes(response.status) ? null : body, {
+            status: response.status, statusText: response.statusText, headers: response.headers,
+          });
+        } catch (e) {
+          // The SDK wraps whatever is thrown here in a FetchError whose message says only
+          // "The request failed and the interceptors did not return an alternative
+          // response"; say what was being fetched and how it failed.
+          throw new YnabTransportError(method, input, status, this.now() - started, signal?.aborted ?? false, e);
+        }
         if (response.status === 429) {
           this.lastRateLimitAt = this.now();
           const delay = retryAfterMs(response.headers.get("retry-after"), this.now());
@@ -105,13 +122,6 @@ export class ApiUsageTracker {
             this.cooldownSource = delay === null ? "local-backoff" : "retry-after";
           }
         }
-        // Hold the permit through body transfer, not merely until response headers.
-        // This also makes the timeout cover SDK JSON reads and avoids unbounded
-        // concurrent export streams after fetch() resolves.
-        const body = await response.arrayBuffer();
-        response = new Response([204, 205, 304].includes(response.status) ? null : body, {
-          status: response.status, statusText: response.statusText, headers: response.headers,
-        });
         if (response.status === 403) {
           // Inspect a clone: unrelated permission failures are not 403.4 data limits.
           const body = await response.clone().json().catch(() => null);
@@ -161,6 +171,59 @@ export class ApiUsageTracker {
       uncertainty: "Counts every local HTTP attempt, including retries and follow-ups. Other clients using the same access token and earlier process lifetimes are unobserved; remaining is an estimate, not upstream quota. Attempts that never reached YNAB can also overcount usage. Data-limit allowance is unknown.",
       policy: { concurrency: this.concurrency, maxQueued: 64, timeoutMs: 45000, maxReadRetries: 1, maxBackoffMs: MAX_BACKOFF_MS, mutationRetries: 0 },
     };
+  }
+}
+
+/** The chain of causes under a thrown value, as "message (CODE)" parts, outermost first. */
+export function causeChain(e: unknown): string[] {
+  const parts: string[] = [];
+  const seen = new Set<unknown>();
+  for (let c = e; c !== undefined && c !== null && !seen.has(c); c = (c as { cause?: unknown }).cause) {
+    seen.add(c);
+    const message = c instanceof Error ? c.message : typeof c === "object" ? "" : String(c);
+    const code = (c as { code?: unknown }).code;
+    const part = [message, typeof code === "string" && !message.includes(code) ? `(${code})` : ""].filter(Boolean).join(" ");
+    if (part && !parts.includes(part)) parts.push(part);
+  }
+  return parts;
+}
+
+/**
+ * A request to YNAB that got no complete HTTP response: the connection failed, was
+ * cut while the body was downloading, or timed out. Never an HTTP error status.
+ */
+export class YnabTransportError extends Error {
+  override name = "YnabTransportError";
+  readonly path: string;
+  constructor(
+    readonly method: string,
+    input: Parameters<typeof fetch>[0],
+    /** Status of the response whose body was cut off; null when no response arrived. */
+    readonly status: number | null,
+    readonly elapsedMs: number,
+    cancelled: boolean,
+    cause: unknown,
+  ) {
+    super("", { cause });
+    const raw = input instanceof Request ? input.url : String(input);
+    let path = raw;
+    try { path = new URL(raw).pathname.replace(/^\/v1/, ""); } catch { /* keep raw */ }
+    // Plan, account and transaction ids are noise in a message; the shape names the endpoint.
+    this.path = path.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "{id}");
+    const seconds = `${(elapsedMs / 1000).toFixed(1)} s`;
+    const chain = causeChain(cause);
+    const timedOut = chain.some(p => /TimeoutError|timed? ?out|aborted due to timeout/i.test(p))
+      || (cause as { name?: string })?.name === "TimeoutError";
+    const what = `YNAB ${method} ${this.path}`;
+    const how = cancelled ? `cancelled by the caller after ${seconds}`
+      : timedOut ? `no ${status === null ? "response" : "complete response"} within 45 s`
+      : status === null ? `the connection failed after ${seconds}, before YNAB answered`
+      : `YNAB answered ${status}, but the connection dropped after ${seconds} while the response was still downloading`;
+    const write = !["GET", "HEAD"].includes(method);
+    const next = write
+      ? "This was a write and is not retried automatically: YNAB may or may not have applied it, so check before retrying."
+      : "Nothing was changed; it was not retried, and is safe to retry.";
+    this.message = `${what}: ${how}${chain.length ? ` (${chain.join(": ")})` : ""}. A network failure, not an error YNAB returned. ${next}`;
   }
 }
 

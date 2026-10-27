@@ -275,4 +275,4 @@ npm start      # Run compiled server
 
 ## License
 
-MIT
+MIT, see [LICENSE](LICENSE).

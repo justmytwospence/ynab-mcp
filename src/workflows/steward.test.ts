@@ -2,7 +2,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import type { BudgetSnapshot } from "../budget-snapshot.js";
 import { BudgetModel } from "./lib/budget-model.js";
-import { findIntegrityProblems, planRepairs } from "./lib/integrity.js";
+import { findIntegrityProblems, planRepairs, READY_TO_ASSIGN } from "./lib/integrity.js";
 import { planMonth } from "./lib/month-plan.js";
 import { suggestCategories } from "./lib/categorize.js";
 
@@ -134,6 +134,89 @@ test("a past month already short of Ready to Assign does not block an earlier co
   const blocked = planRepairs(tight, findIntegrityProblems(tight));
   assert.equal(blocked.repairs.length, 0);
   assert.match(blocked.unresolved.find((u) => u.kind === "overspend")!.reason, /below zero in 2026-03 \(it has \$10\.00\)/);
+});
+
+test("asked before bridging, a cover that needs borrowing becomes a proposal, answered later", () => {
+  const snap = snapshot({
+    cells: {
+      food: { "2026-01-01": { activity: -30_000, balance: -30_000 } },
+      saved: { "2026-01-01": { budgeted: 100_000, balance: 100_000 }, "2026-02-01": { balance: 100_000 }, "2026-03-01": { balance: 100_000 } },
+      small: { "2026-01-01": { budgeted: 10_000, balance: 10_000 }, "2026-02-01": { balance: 10_000 }, "2026-03-01": { balance: 10_000 } },
+    },
+    tbb: [0, 50_000, 50_000],
+    transactions: [{ id: "t1", date: "2026-01-10", amount: -30_000, account: "chk", category: "food" }],
+  });
+  const model = new BudgetModel(snap, TODAY);
+  const findings = findIntegrityProblems(model);
+  const asked = planRepairs(model, findings, { askBeforeBridging: true });
+  assert.equal(asked.repairs.length, 0);
+  assert.equal(asked.unresolved.length, 0);
+  assert.equal(asked.writes.length, 0);
+  const p = asked.proposals[0]!;
+  assert.equal(p.key, "overspend:2026-01:food");
+  assert.equal(p.giveBack, "2026-02-01");
+  // Only a category that alone held enough is offered: small (10.00) is not.
+  assert.deepEqual(p.options.map((o) => [o.categoryId, o.spare]), [["saved", 100_000]]);
+  assert.deepEqual(p.readyToAssignAnyway, { months: ["2026-01-01"], lowest: { month: "2026-01-01", readyToAssign: -30_000 } });
+
+  const fromSaved = planRepairs(model, findings, { askBeforeBridging: true, bridgeSources: { [p.key]: "saved" } });
+  assert.equal(fromSaved.proposals.length, 0);
+  assert.deepEqual(fromSaved.repairs.map((r) => [r.key, r.method, r.sources.map((x) => x.categoryId)]), [["overspend:2026-01:food", "bridge", ["saved"]]]);
+  assert.deepEqual(
+    fromSaved.writes.map((w) => [w.month, w.categoryId, w.to - w.from]),
+    [["2026-01-01", "food", 30_000], ["2026-01-01", "saved", -30_000], ["2026-02-01", "saved", 30_000]]
+  );
+
+  const anyway = planRepairs(model, findings, { askBeforeBridging: true, bridgeSources: { [p.key]: READY_TO_ASSIGN } });
+  assert.deepEqual(anyway.writes.map((w) => [w.month, w.categoryId, w.to - w.from]), [["2026-01-01", "food", 30_000]]);
+
+  // A choice that cannot lend enough (any more) leaves the question open, saying why.
+  const tooSmall = planRepairs(model, findings, { askBeforeBridging: true, bridgeSources: { [p.key]: "small" } });
+  assert.equal(tooSmall.repairs.length, 0);
+  assert.match(tooSmall.proposals[0]!.reason!, /small only had \$10\.00 unused from 2026-01 to 2026-01/);
+});
+
+test("an open question about a credit cover holds back that card's gap fixes", () => {
+  const snap = snapshot({
+    cells: {
+      food: { "2026-01-01": { activity: -30_000, balance: -30_000 } },
+      saved: { "2026-01-01": { budgeted: 100_000, balance: 100_000 }, "2026-02-01": { balance: 100_000 }, "2026-03-01": { balance: 100_000 } },
+      "card-pay": { "2026-01-01": { balance: 0 }, "2026-02-01": { balance: 0 }, "2026-03-01": { balance: 0 } },
+    },
+    tbb: [0, 50_000, 50_000],
+    transactions: [{ id: "t1", date: "2026-01-10", amount: -30_000, account: "card", category: "food" }],
+  });
+  const model = new BudgetModel(snap, TODAY);
+  const plan = planRepairs(model, findIntegrityProblems(model), { askBeforeBridging: true });
+  assert.deepEqual(plan.proposals.map((p) => p.key), ["overspend:2026-01:food"]);
+  assert.equal(plan.deferredCardGaps, true);
+  assert.equal(plan.repairs.length, 0);
+});
+
+test("a negative Ready to Assign month asks which single category to take it back from", () => {
+  const snap = snapshot({
+    cells: { saved: { "2026-01-01": { budgeted: 80_000, balance: 80_000 }, "2026-02-01": { balance: 80_000 }, "2026-03-01": { balance: 80_000 } } },
+    tbb: [-20_000, 10_000, 10_000],
+    transactions: [],
+  });
+  const model = new BudgetModel(snap, TODAY);
+  const findings = findIntegrityProblems(model);
+  const asked = planRepairs(model, findings, { askBeforeBridging: true });
+  assert.deepEqual(asked.proposals.map((p) => [p.key, p.options.map((o) => o.categoryId), p.readyToAssignAnyway]), [["rta_shortfall:2026-01:ready-to-assign", ["saved"], null]]);
+  assert.equal(asked.unresolved.length, 0);
+  const answered = planRepairs(model, findings, { askBeforeBridging: true, bridgeSources: { "rta_shortfall:2026-01:ready-to-assign": "saved" } });
+  assert.deepEqual(answered.writes.map((w) => [w.month, w.to - w.from]), [["2026-01-01", -20_000], ["2026-02-01", 20_000]]);
+});
+
+test("card gap repairs carry their card as group, for applying a card all or nothing", () => {
+  const snap = snapshot({
+    cells: { "card-pay": { "2026-01-01": { balance: 40_000 }, "2026-02-01": { balance: 40_000 }, "2026-03-01": { balance: 40_000 } } },
+    tbb: [500_000, 500_000, 500_000],
+    transactions: [{ id: "t1", date: "2026-01-10", amount: -45_000, account: "card", category: "food" }],
+  });
+  const model = new BudgetModel(snap, TODAY);
+  const plan = planRepairs(model, findIntegrityProblems(model), { askBeforeBridging: true });
+  assert.deepEqual(plan.repairs.map((r) => [r.key, r.group]), [["card_gap:2026-01:card-pay", "card:card"]]);
 });
 
 test("with no covers pending, a card gap is assigned to the payment category in its month", () => {

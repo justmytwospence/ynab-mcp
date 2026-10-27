@@ -200,6 +200,10 @@ export type RepairKind = "rta_shortfall" | "overspend" | "card_gap";
 export type RepairMethod = "ready_to_assign" | "bridge" | "release";
 
 export interface Repair {
+  /** Stable id: `<kind>:<YYYY-MM>:<categoryId|ready-to-assign>`, as a proposal's key. */
+  key: string;
+  /** `card:<cardId>` for card-gap repairs, which are applied all or nothing per card. */
+  group?: string;
   kind: RepairKind;
   month: string;
   /** The category being fixed (target), or null for an RTA shortfall. */
@@ -222,8 +226,40 @@ export interface Unresolved {
   reason: string;
 }
 
+/** A source a proposal offers: a category that alone held enough unused money all along. */
+export interface ProposalOption {
+  categoryId: string;
+  label: string;
+  /** Its lowest balance over the borrowing stretch, before this repair. */
+  spare: number;
+}
+
+/**
+ * A repair that needs borrowing, asked instead of done (askBeforeBridging). Answer it by
+ * passing `bridgeSources[key]`: a category id, or "ready_to_assign" to fund it from Ready
+ * to Assign even though that pushes the months in `readyToAssignAnyway` below zero.
+ */
+export interface Proposal {
+  key: string;
+  group?: string;
+  kind: RepairKind;
+  month: string;
+  categoryId: string | null;
+  label: string;
+  amount: number;
+  /** Borrowed from `month` through the month before `giveBack`, and given back in `giveBack`. */
+  giveBack: string | null;
+  options: ProposalOption[];
+  /** What funding it from Ready to Assign anyway does; null when that is not possible. */
+  readyToAssignAnyway: { months: string[]; lowest: { month: string; readyToAssign: number } } | null;
+  /** Set when an answer was given but could not be used, saying why. */
+  reason?: string;
+}
+
 export interface RepairPlan {
   repairs: Repair[];
+  /** Repairs that need borrowing, waiting for a choice (askBeforeBridging only). */
+  proposals: Proposal[];
   unresolved: Unresolved[];
   /** Card gaps are left for the next run while covers are pending: covers move card money themselves. */
   deferredCardGaps: boolean;
@@ -349,7 +385,15 @@ export interface RepairOptions {
   strictReadyToAssign?: boolean;
   /** Group names never used as bridge sources (e.g. savings you never want touched). */
   protectedGroups?: string[];
+  /** Ask before borrowing: a repair that needs a bridge becomes a Proposal, not a repair. */
+  askBeforeBridging?: boolean;
+  /** Answers to proposals, by key: a source category id, or "ready_to_assign". */
+  bridgeSources?: Record<string, string>;
 }
+
+export const READY_TO_ASSIGN = "ready_to_assign";
+export const repairKey = (kind: RepairKind, month: string, categoryId: string | null) =>
+  `${kind}:${month.substring(0, 7)}:${categoryId ?? "ready-to-assign"}`;
 
 /**
  * Plan repairs, cheapest first.
@@ -372,9 +416,13 @@ export interface RepairOptions {
  * allowNegativeReadyToAssign is set.
  */
 export function planRepairs(model: BudgetModel, findings: Findings, options: RepairOptions = {}): RepairPlan {
-  const { allowNegativeReadyToAssign = false, strictReadyToAssign = false, protectedGroups = [] } = options;
+  const {
+    allowNegativeReadyToAssign = false, strictReadyToAssign = false, protectedGroups = [],
+    askBeforeBridging = false, bridgeSources = {},
+  } = options;
   const sim = new Simulation(model);
   const repairs: Repair[] = [];
+  const proposals: Proposal[] = [];
   const unresolved: Unresolved[] = [];
   const current = model.currentMonth;
   const lastMonth = model.months[model.months.length - 1] ?? current;
@@ -396,18 +444,24 @@ export function planRepairs(model: BudgetModel, findings: Findings, options: Rep
     found: number;
   }
 
+  /** A category's lowest balance from `month` until `giveBack` (what it can lend), 0 at worst. */
+  const spareOf = (id: string, month: string, giveBack: string) => {
+    const series = sim.balances(id, month, addMonths(giveBack, -1));
+    return series.length > 0 ? Math.max(0, Math.min(...series)) : 0;
+  };
+
+  /** Categories that held unused money from `month` until `giveBack`, most first. */
+  const lenders = (month: string, exclude: string | null, giveBack: string) =>
+    Array.from(model.monthCategories.get(month)?.keys() ?? [])
+      .filter((id) => id !== exclude && isBridgeSource(id, month))
+      .map((id) => ({ id, spare: spareOf(id, month, giveBack) }))
+      .filter((c) => c.spare >= SUB_CENT)
+      .sort((a, b) => b.spare - a.spare || a.id.localeCompare(b.id));
+
   /** Find up to `needed` in categories unused from `month` until `giveBack`. */
   const findBridge = (month: string, needed: number, exclude: string | null, giveBack: string | null): Bridge | null => {
     if (!giveBack) return null;
-    const through = addMonths(giveBack, -1);
-    const candidates = Array.from(model.monthCategories.get(month)?.keys() ?? [])
-      .filter((id) => id !== exclude && isBridgeSource(id, month))
-      .map((id) => {
-        const series = sim.balances(id, month, through);
-        return { id, spare: series.length > 0 ? Math.max(0, Math.min(...series)) : 0 };
-      })
-      .filter((c) => c.spare >= SUB_CENT)
-      .sort((a, b) => b.spare - a.spare || a.id.localeCompare(b.id));
+    const candidates = lenders(month, exclude, giveBack);
     const sources: Repair["sources"] = [];
     let remaining = needed;
     for (const c of candidates) {
@@ -432,12 +486,37 @@ export function planRepairs(model: BudgetModel, findings: Findings, options: Rep
     const shortfall = -sim.readyToAssign(r.month);
     if (shortfall < SUB_CENT) continue;
     const before = sim.netChanges();
+    const key = repairKey("rta_shortfall", r.month, null);
     // The following month's RTA already absorbed this shortfall, so giving the
     // money back there leaves it, and every month after, unchanged.
-    const b = findBridge(r.month, shortfall, null, addMonths(r.month, 1));
+    const giveBack = addMonths(r.month, 1);
+    let b: Bridge | null = null;
+    let reason: string | undefined;
+    const choice = bridgeSources[key];
+    if (choice && choice !== READY_TO_ASSIGN) {
+      const spare = isBridgeSource(choice, r.month) ? spareOf(choice, r.month, giveBack) : 0;
+      if (spare >= shortfall - SUB_CENT) b = { giveBack, sources: [{ categoryId: choice, label: model.categoryLabel(choice), amount: shortfall }], found: shortfall };
+      else reason = `${model.categoryLabel(choice)} only had ${formatCurrency(spare)} unused in ${r.month.substring(0, 7)}`;
+    }
+    if (!b && askBeforeBridging) {
+      const options = lenders(r.month, null, giveBack).filter((c) => c.spare >= shortfall - SUB_CENT).slice(0, 3)
+        .map((c) => ({ categoryId: c.id, label: model.categoryLabel(c.id), spare: c.spare }));
+      // Ready to Assign cannot fund its own shortfall, so with no single lender there is
+      // nothing to ask: it is reported as unresolved below.
+      if (options.length > 0) {
+        proposals.push({
+          key, kind: "rta_shortfall", month: r.month, categoryId: null, label: "Ready to Assign", amount: shortfall,
+          giveBack, options, readyToAssignAnyway: null, ...(reason ? { reason } : {}),
+        });
+        continue;
+      }
+    } else if (!b) {
+      b = findBridge(r.month, shortfall, null, giveBack);
+    }
     if (b) {
       applyBridge(r.month, b);
       repairs.push({
+        key,
         kind: "rta_shortfall",
         month: r.month,
         categoryId: null,
@@ -496,32 +575,67 @@ export function planRepairs(model: BudgetModel, findings: Findings, options: Rep
     return `covering it would push Ready to Assign below zero in ${where}, and no category held enough unused money over that time to bridge it`;
   };
 
-  /** Fund `amount` into a category in a month: RTA first, then a bridge. Returns what was funded. */
-  const fund = (kind: RepairKind, month: string, categoryId: string, label: string, amount: number): number => {
+  /**
+   * Fund `amount` into a category in a month: Ready to Assign first, then a bridge (asked
+   * for, with askBeforeBridging, unless already answered in bridgeSources).
+   */
+  const fund = (kind: RepairKind, month: string, categoryId: string, label: string, amount: number, group?: string): { funded: number; asked: boolean } => {
     const before = sim.netChanges();
-    if (blockingMonth(month, amount) === null || allowNegativeReadyToAssign) {
+    const key = repairKey(kind, month, categoryId);
+    const choice = bridgeSources[key];
+    const tag = { key, ...(group ? { group } : {}) };
+    if (blockingMonth(month, amount) === null || allowNegativeReadyToAssign || choice === READY_TO_ASSIGN) {
       sim.change(month, categoryId, amount);
       repairs.push({
-        kind, month, categoryId, label, amount, method: "ready_to_assign", sources: [],
+        ...tag, kind, month, categoryId, label, amount, method: "ready_to_assign", sources: [],
         changes: diff(before, sim.netChanges()),
       });
-      return amount;
+      return { funded: amount, asked: false };
     }
-    const b = findBridge(month, amount, categoryId, absorbingMonth(month, amount));
-    if (!b) return 0;
-    applyBridge(month, b);
-    sim.change(month, categoryId, b.found);
-    repairs.push({
-      kind, month, categoryId, label, amount: b.found, method: "bridge", sources: b.sources,
-      changes: diff(before, sim.netChanges()),
-    });
-    return b.found;
+    const giveBack = absorbingMonth(month, amount);
+    const bridged = (b: Bridge) => {
+      applyBridge(month, b);
+      sim.change(month, categoryId, b.found);
+      repairs.push({
+        ...tag, kind, month, categoryId, label, amount: b.found, method: "bridge", sources: b.sources,
+        changes: diff(before, sim.netChanges()),
+      });
+      return { funded: b.found, asked: false };
+    };
+    let reason: string | undefined;
+    if (choice) {
+      const spare = giveBack && choice !== categoryId && isBridgeSource(choice, month) ? spareOf(choice, month, giveBack) : 0;
+      if (giveBack && spare >= amount - SUB_CENT) {
+        return bridged({ giveBack, sources: [{ categoryId: choice, label: model.categoryLabel(choice), amount }], found: amount });
+      }
+      reason = giveBack
+        ? `${model.categoryLabel(choice)} only had ${formatCurrency(spare)} unused from ${month.substring(0, 7)} to ${addMonths(giveBack, -1).substring(0, 7)}`
+        : `Ready to Assign never has room to give borrowed money back`;
+    }
+    if (askBeforeBridging) {
+      const options = giveBack
+        ? lenders(month, categoryId, giveBack).filter((c) => c.spare >= amount - SUB_CENT).slice(0, 3)
+          .map((c) => ({ categoryId: c.id, label: model.categoryLabel(c.id), spare: c.spare }))
+        : [];
+      const short = model.months.filter((m) => m >= month && !settled(m) && sim.readyToAssign(m) - amount < 0);
+      const lowest = short.reduce<{ month: string; readyToAssign: number } | null>((low, m) => {
+        const v = sim.readyToAssign(m) - amount;
+        return !low || v < low.readyToAssign ? { month: m, readyToAssign: v } : low;
+      }, null);
+      proposals.push({
+        ...tag, kind, month, categoryId, label, amount, giveBack, options,
+        readyToAssignAnyway: lowest ? { months: short, lowest } : null, ...(reason ? { reason } : {}),
+      });
+      return { funded: 0, asked: true };
+    }
+    const b = findBridge(month, amount, categoryId, giveBack);
+    return b ? bridged(b) : { funded: 0, asked: false };
   };
 
   // 2. Overspends.
   for (const o of [...findings.overspends].sort((a, b) => a.month.localeCompare(b.month))) {
-    const funded = fund("overspend", o.month, o.categoryId, o.category, o.amount);
-    if (o.amount - funded >= SUB_CENT) {
+    const { funded, asked } = fund("overspend", o.month, o.categoryId, o.category, o.amount);
+    if (!asked && o.amount - funded >= SUB_CENT) {
       unresolved.push({
         kind: "overspend",
         month: o.month,
@@ -536,11 +650,13 @@ export function planRepairs(model: BudgetModel, findings: Findings, options: Rep
 
   // 3. Card gaps.
   const creditKeys = new Set(findings.overspends.filter((o) => o.credit > 0).map((o) => `${o.categoryId}|${o.month}`));
-  const coversPending = repairs.some((r) => r.kind === "overspend" && creditKeys.has(`${r.categoryId}|${r.month}`));
+  // A cover waiting for an answer is pending too: card gaps wait for it either way.
+  const coversPending = [...repairs, ...proposals].some((r) => r.kind === "overspend" && creditKeys.has(`${r.categoryId}|${r.month}`));
   if (!coversPending) {
     for (const card of findings.cards) {
       if (card.skipped || !card.paymentCategoryId) continue;
       const label = `${card.card} payment`;
+      const group = `card:${card.cardId}`;
       // All or nothing per card: gap changes often come in pairs (too much one
       // month, too little the next), and fixing only one half makes it worse.
       const checkpoint = { repairs: repairs.length, unresolved: unresolved.length, sim: sim.snapshot() };
@@ -551,12 +667,14 @@ export function planRepairs(model: BudgetModel, findings: Findings, options: Rep
           const before = sim.netChanges();
           sim.change(m.month, card.paymentCategoryId, m.change);
           repairs.push({
+            key: repairKey("card_gap", m.month, card.paymentCategoryId), group,
             kind: "card_gap", month: m.month, categoryId: card.paymentCategoryId, label, amount: m.change,
             method: "release", sources: [], changes: diff(before, sim.netChanges()),
           });
           continue;
         }
-        const funded = fund("card_gap", m.month, card.paymentCategoryId, label, m.change);
+        const { funded, asked } = fund("card_gap", m.month, card.paymentCategoryId, label, m.change, group);
+        if (asked) { blocked = true; continue; }
         if (m.change - funded >= SUB_CENT) {
           blocked = true;
           unresolved.push({
@@ -582,6 +700,7 @@ export function planRepairs(model: BudgetModel, findings: Findings, options: Rep
 
   return {
     repairs,
+    proposals,
     unresolved,
     deferredCardGaps: coversPending,
     writes,

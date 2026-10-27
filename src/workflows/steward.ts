@@ -7,7 +7,7 @@ import { getBudgetSnapshot, invalidateBudgetSnapshot } from "../budget-snapshot.
 import { textResult, errorResult, jsonResult, formatCurrency } from "../utils/formatting.js";
 import { describeError } from "../utils/errors.js";
 import { HUMAN_DESC, asHuman } from "../utils/ai-flag.js";
-import { BudgetModel } from "./lib/budget-model.js";
+import { BudgetModel, addMonths } from "./lib/budget-model.js";
 import { findIntegrityProblems, planRepairs, type Findings, type RepairPlan, type Repair } from "./lib/integrity.js";
 import { planMonth, type MonthPlan } from "./lib/month-plan.js";
 import { suggestCategories, type Suggestion } from "./lib/categorize.js";
@@ -35,7 +35,9 @@ export function registerStewardTools(server: McpServer) {
       "Available differs from what the card owes. Plans repairs: cover from Ready to Assign when that month and every " +
       "later one can afford it (a past month already negative is settled history and does not block), otherwise 'bridge' from categories holding unused money and give it back when Ready " +
       "to Assign can absorb it, so today's balances are unchanged. Card gaps are planned once no credit cover is " +
-      "pending (run again after applying). apply=true writes the plan (assigned amounts in past months).",
+      "pending (run again after applying). With ask_before_bridging, borrowing is never chosen for you: each such " +
+      "repair comes back as a proposal (key, lending options, Ready-to-Assign-anyway effect) to answer with " +
+      "bridge_sources; `only` limits apply to the answered ones. apply=true writes the plan (assigned amounts in past months).",
     inputSchema: z.object({
       budget_id: budgetId,
       since_month: z.string().optional().describe("Only audit months on or after this (YYYY-MM-01)"),
@@ -44,6 +46,9 @@ export function registerStewardTools(server: McpServer) {
       allow_negative_ready_to_assign: z.boolean().default(false).describe("Last resort: cover even when Ready to Assign goes negative somewhere"),
       strict_ready_to_assign: z.boolean().default(false).describe("Also refuse to lower a past month whose Ready to Assign is already negative (default: such a month is settled history and may go further negative; months at or above zero, and the current month on, never go negative)"),
       protected_groups: z.array(z.string()).default([]).describe("Category group names never used as bridge sources"),
+      ask_before_bridging: z.boolean().default(false).describe("Do not borrow on your own: a repair that needs a bridge is returned in plan.proposals, with the categories that could lend it and what funding it from Ready to Assign anyway would do, instead of being planned"),
+      bridge_sources: z.record(z.string(), z.string()).default({}).describe("Answers to proposals, by proposal key: the category id to borrow from, or \"ready_to_assign\" to fund it from Ready to Assign anyway. A category that no longer holds enough leaves the proposal open with a reason"),
+      only: z.array(z.string()).optional().describe("With apply: write only the repairs with these keys (a proposal's key, or card:<cardId> for a card's whole set of gap fixes)"),
       max_writes: z.number().int().default(60).describe("Stop applying after this many writes (whole repairs only)"),
       today,
       format,
@@ -61,8 +66,12 @@ export function registerStewardTools(server: McpServer) {
         allowNegativeReadyToAssign: args.allow_negative_ready_to_assign,
         strictReadyToAssign: args.strict_ready_to_assign,
         protectedGroups: args.protected_groups,
+        askBeforeBridging: args.ask_before_bridging,
+        bridgeSources: args.bridge_sources,
       });
-      const applied = args.apply ? await applyRepairs(snapshot.budgetId, model, plan.repairs, args.max_writes) : null;
+      const only = args.only;
+      const chosen = only ? plan.repairs.filter((r) => only.includes(r.key) || (r.group !== undefined && only.includes(r.group))) : plan.repairs;
+      const applied = args.apply ? await applyRepairs(snapshot.budgetId, model, chosen, args.max_writes) : null;
       if (applied) invalidateBudgetSnapshot(args.budget_id);
       const calls = apiCalls + (applied?.writes ?? 0);
       if (args.format === "json") return jsonResult({ findings, plan, applied, api_calls: calls });
@@ -311,6 +320,8 @@ function nextMonth(month: string): string {
 
 interface Applied {
   repairs: number;
+  /** Keys of the repairs written, in order. */
+  keys: string[];
   writes: number;
   failed: string[];
   stoppedAt?: string;
@@ -330,7 +341,7 @@ async function applyRepairs(budgetId: string, model: BudgetModel, repairs: Repai
   }
   return apiUsageTracker.withBudget(plannedWrites, async () => {
     const running = new Map<string, number>();
-    const result: Applied = { repairs: 0, writes: 0, failed: [] };
+    const result: Applied = { repairs: 0, keys: [], writes: 0, failed: [] };
     for (const repair of repairs) {
       if (result.writes + repair.changes.length > maxWrites) {
         result.stoppedAt = `write cap ${maxWrites} reached before ${repair.kind} ${month7(repair.month)} ${repair.label}`;
@@ -354,6 +365,7 @@ async function applyRepairs(budgetId: string, model: BudgetModel, repairs: Repai
         }
       }
       result.repairs += 1;
+      result.keys.push(repair.key);
     }
     return result;
   });
@@ -415,6 +427,18 @@ function renderIntegrity(findings: Findings, plan: RepairPlan, applied: Applied 
     lines.push(`  ${r.kind} ${month7(r.month)} ${r.label}: ${money(r.amount)} ${how}`);
   }
   if (plan.deferredCardGaps) lines.push(`  Card gaps are planned after these covers are applied (they move card money).`);
+  if (plan.proposals.length > 0) {
+    lines.push(``, `Needs borrowing, asking first (${plan.proposals.length}); answer with bridge_sources {key: source}:`);
+    for (const p of plan.proposals) {
+      const window = p.giveBack ? ` (borrowed ${month7(p.month)} to ${month7(addMonths(p.giveBack, -1))}, given back ${month7(p.giveBack)})` : "";
+      lines.push(`  [${p.key}] ${p.kind} ${month7(p.month)} ${p.label}: ${money(p.amount)}${window}${p.reason ? ` - ${p.reason}` : ""}`);
+      for (const o of p.options) lines.push(`    ${o.categoryId}: ${o.label} (lowest unused ${money(o.spare)})`);
+      if (p.readyToAssignAnyway) {
+        const a = p.readyToAssignAnyway;
+        lines.push(`    ready_to_assign: anyway; ${a.months.length} month(s) below zero, lowest ${month7(a.lowest.month)} at ${money(a.lowest.readyToAssign)}`);
+      }
+    }
+  }
   if (plan.unresolved.length > 0) {
     lines.push(``, `Needs a decision (${plan.unresolved.length}):`);
     for (const u of plan.unresolved) lines.push(`  ${u.kind} ${month7(u.month)} ${u.label}: ${money(u.shortBy)} short, ${u.reason}`);

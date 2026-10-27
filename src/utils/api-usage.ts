@@ -4,6 +4,8 @@ import { recordAttempt } from "./operation.js";
 const RATE_LIMIT = 200;
 const WINDOW_MS = 3_600_000;
 const MAX_BACKOFF_MS = 5000;
+/** Pause before re-sending a read whose connection dropped. */
+const TRANSPORT_RETRY_MS = 500;
 const iso = (time: number | null) => time === null ? null : new Date(time).toISOString();
 
 interface Options {
@@ -83,7 +85,8 @@ export class ApiUsageTracker {
     const method = (init?.method ?? (input instanceof Request ? input.method : "GET")).toUpperCase();
     for (let attempt = 0; ; attempt++) {
       await this.acquire();
-      let response: Response;
+      let response: Response | undefined;
+      let lost: YnabTransportError | null = null;
       try {
         this.assertAvailable(1);
         const lease = this.leases.getStore();
@@ -111,32 +114,39 @@ export class ApiUsageTracker {
           // The SDK wraps whatever is thrown here in a FetchError whose message says only
           // "The request failed and the interceptors did not return an alternative
           // response"; say what was being fetched and how it failed.
-          throw new YnabTransportError(method, input, status, this.now() - started, signal?.aborted ?? false, e);
+          lost = new YnabTransportError(method, input, status, this.now() - started, signal?.aborted ?? false, e, attempt + 1);
+          // A read whose connection dropped is retried once below (after the permit is
+          // released); timeouts, cancellations, writes and second failures are not.
+          if (!(lost.retryable && attempt === 0)) throw lost;
         }
-        if (response.status === 429) {
-          this.lastRateLimitAt = this.now();
-          const delay = retryAfterMs(response.headers.get("retry-after"), this.now());
-          const until = this.now() + (delay ?? 60000);
-          if (until >= (this.cooldownUntil ?? 0)) {
-            this.cooldownUntil = until;
-            this.cooldownSource = delay === null ? "local-backoff" : "retry-after";
+        if (!lost && response) {
+          if (response.status === 429) {
+            this.lastRateLimitAt = this.now();
+            const delay = retryAfterMs(response.headers.get("retry-after"), this.now());
+            const until = this.now() + (delay ?? 60000);
+            if (until >= (this.cooldownUntil ?? 0)) {
+              this.cooldownUntil = until;
+              this.cooldownSource = delay === null ? "local-backoff" : "retry-after";
+            }
+          }
+          if (response.status === 403) {
+            // Inspect a clone: unrelated permission failures are not 403.4 data limits.
+            const body = await response.clone().json().catch(() => null);
+            if (body?.error?.id === "403.4") this.lastDataLimitAt = this.now();
+          }
+          if (!response.ok && !(response.headers.get("content-type") ?? "").includes("json")) {
+            const body = JSON.stringify({ error: {
+              id: String(response.status), name: response.statusText || "api_error",
+              detail: `YNAB API returned ${response.status}: ${(await response.text()).slice(0, 200)}`,
+            } });
+            response = new Response(body, { status: response.status, statusText: response.statusText,
+              headers: { "content-type": "application/json", ...(response.headers.has("retry-after") ? { "retry-after": response.headers.get("retry-after")! } : {}) } });
           }
         }
-        if (response.status === 403) {
-          // Inspect a clone: unrelated permission failures are not 403.4 data limits.
-          const body = await response.clone().json().catch(() => null);
-          if (body?.error?.id === "403.4") this.lastDataLimitAt = this.now();
-        }
-        if (!response.ok && !(response.headers.get("content-type") ?? "").includes("json")) {
-          const body = JSON.stringify({ error: {
-            id: String(response.status), name: response.statusText || "api_error",
-            detail: `YNAB API returned ${response.status}: ${(await response.text()).slice(0, 200)}`,
-          } });
-          response = new Response(body, { status: response.status, statusText: response.statusText,
-            headers: { "content-type": "application/json", ...(response.headers.has("retry-after") ? { "retry-after": response.headers.get("retry-after")! } : {}) } });
-        }
       } finally { this.release(); }
-      // Only GET/HEAD, only one retry, never a network/timeout or ambiguous mutation replay.
+      if (lost) { await this.sleep(TRANSPORT_RETRY_MS); continue; }
+      if (!response) throw new Error("unreachable: no response and no transport failure");
+      // Only GET/HEAD, only one retry, never a timeout or ambiguous mutation replay.
       const retryable = ["GET", "HEAD"].includes(method) && attempt === 0 && [429, 500, 502].includes(response.status);
       if (!retryable) return response;
       const delay = response.status === 429 ? Math.max(0, this.cooldownUntil! - this.now())
@@ -195,14 +205,19 @@ export function causeChain(e: unknown): string[] {
 export class YnabTransportError extends Error {
   override name = "YnabTransportError";
   readonly path: string;
+  readonly timedOut: boolean;
+  /** A read that failed for a reason worth one more attempt. */
+  readonly retryable: boolean;
   constructor(
     readonly method: string,
     input: Parameters<typeof fetch>[0],
     /** Status of the response whose body was cut off; null when no response arrived. */
     readonly status: number | null,
     readonly elapsedMs: number,
-    cancelled: boolean,
+    readonly cancelled: boolean,
     cause: unknown,
+    /** Attempts made, this one included. */
+    readonly attempts = 1,
   ) {
     super("", { cause });
     const raw = input instanceof Request ? input.url : String(input);
@@ -212,17 +227,23 @@ export class YnabTransportError extends Error {
     this.path = path.replace(/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}/gi, "{id}");
     const seconds = `${(elapsedMs / 1000).toFixed(1)} s`;
     const chain = causeChain(cause);
-    const timedOut = chain.some(p => /TimeoutError|timed? ?out|aborted due to timeout/i.test(p))
+    const timedOut = this.timedOut = chain.some(p => /TimeoutError|timed? ?out|aborted due to timeout/i.test(p))
       || (cause as { name?: string })?.name === "TimeoutError";
+    const write = !["GET", "HEAD"].includes(method);
+    // Reads change nothing, so a dropped connection is worth one more try; a timeout is
+    // not (another 45 s), nor is a cancellation, nor a write that may have applied.
+    this.retryable = !write && !timedOut && !cancelled;
     const what = `YNAB ${method} ${this.path}`;
     const how = cancelled ? `cancelled by the caller after ${seconds}`
       : timedOut ? `no ${status === null ? "response" : "complete response"} within 45 s`
       : status === null ? `the connection failed after ${seconds}, before YNAB answered`
       : `YNAB answered ${status}, but the connection dropped after ${seconds} while the response was still downloading`;
-    const write = !["GET", "HEAD"].includes(method);
     const next = write
       ? "This was a write and is not retried automatically: YNAB may or may not have applied it, so check before retrying."
-      : "Nothing was changed; it was not retried, and is safe to retry.";
+      : cancelled ? "Nothing was changed."
+      : timedOut ? "Nothing was changed; timeouts are not retried automatically, and it is safe to retry."
+      : attempts > 1 ? "Nothing was changed; the one automatic retry failed too, so YNAB or the network is likely having trouble."
+      : "Nothing was changed, and it is safe to retry.";
     this.message = `${what}: ${how}${chain.length ? ` (${chain.join(": ")})` : ""}. A network failure, not an error YNAB returned. ${next}`;
   }
 }

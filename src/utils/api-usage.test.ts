@@ -203,12 +203,19 @@ test("per-operation costs do not include other overlapping invocations", async (
 test("transport failures say which request failed, how, and whether it is safe to retry", async () => {
   const plan = "https://api.ynab.com/v1/plans/0f8e2c1a-1234-4abc-9def-0123456789ab/months";
   const socket = Object.assign(new Error("other side closed"), { code: "UND_ERR_SOCKET" });
-  const refused = new ApiUsageTracker({ fetch: async () => { throw new TypeError("fetch failed", { cause: socket }); } });
+  const sleeps: number[] = [];
+  let sent = 0;
+  const refused = new ApiUsageTracker({ sleep: async ms => { sleeps.push(ms); }, fetch: async () => { sent++; throw new TypeError("fetch failed", { cause: socket }); } });
   const before = await refused.wrappedFetch(plan).catch(e => e);
   assert.ok(before instanceof YnabTransportError);
   assert.equal(before.status, null);
   assert.match(before.message, /^YNAB GET \/plans\/\{id\}\/months: the connection failed after \d+\.\d s, before YNAB answered \(fetch failed: other side closed \(UND_ERR_SOCKET\)\)\./);
-  assert.match(before.message, /safe to retry/);
+  // A read whose connection dropped is retried once, after half a second.
+  assert.equal(sent, 2);
+  assert.deepEqual(sleeps, [500]);
+  assert.equal(before.attempts, 2);
+  assert.equal(refused.getUsage().used, 2);
+  assert.match(before.message, /the one automatic retry failed too/);
 
   const cut = new ApiUsageTracker({ fetch: async () => new Response(new ReadableStream({
     start(controller) { controller.enqueue(new TextEncoder().encode("{")); controller.error(new TypeError("terminated", { cause: socket })); },
@@ -217,9 +224,20 @@ test("transport failures say which request failed, how, and whether it is safe t
   assert.ok(during instanceof YnabTransportError);
   assert.match(during.message, /YNAB PATCH \/plans\/\{id\}\/months: YNAB answered 200, but the connection dropped .* while the response was still downloading \(terminated: other side closed \(UND_ERR_SOCKET\)\)/);
   assert.match(during.message, /may or may not have applied it/);
+  assert.equal(cut.getUsage().used, 1);   // a write is never re-sent
 
   const slow = new ApiUsageTracker({ fetch: async () => { throw new DOMException("The operation was aborted due to timeout", "TimeoutError"); } });
-  assert.match((await slow.wrappedFetch(plan).catch(e => e)).message, /no response within 45 s/);
+  assert.match((await slow.wrappedFetch(plan).catch(e => e)).message, /no response within 45 s.*timeouts are not retried/);
+  assert.equal(slow.getUsage().used, 1);   // a timed-out read is not re-sent
+
+  // One dropped connection on a read is invisible to the caller.
+  let flaky = 0;
+  const blip = new ApiUsageTracker({ sleep: async () => {}, fetch: async () => {
+    if (++flaky === 1) throw new TypeError("fetch failed", { cause: socket });
+    return ok();
+  } });
+  assert.equal((await blip.wrappedFetch(plan)).status, 200);
+  assert.equal(blip.getUsage().used, 2);
 
   // What the SDK throws on a failed fetch: a FetchError carrying ours as its cause.
   const sdk = Object.assign(new Error("The request failed and the interceptors did not return an alternative response"), { name: "FetchError", cause: before });

@@ -340,6 +340,13 @@ class Simulation {
 export interface RepairOptions {
   /** Permit a repair to leave Ready to Assign negative somewhere, as a last resort. */
   allowNegativeReadyToAssign?: boolean;
+  /**
+   * Treat a past month whose Ready to Assign is already negative as blocking every repair
+   * dated before it. Off by default: such a month is settled history (later income
+   * absorbed it), so a repair may lower it further as long as no month that is fine
+   * stays fine and the current month and later never go negative.
+   */
+  strictReadyToAssign?: boolean;
   /** Group names never used as bridge sources (e.g. savings you never want touched). */
   protectedGroups?: string[];
 }
@@ -365,7 +372,7 @@ export interface RepairOptions {
  * allowNegativeReadyToAssign is set.
  */
 export function planRepairs(model: BudgetModel, findings: Findings, options: RepairOptions = {}): RepairPlan {
-  const { allowNegativeReadyToAssign = false, protectedGroups = [] } = options;
+  const { allowNegativeReadyToAssign = false, strictReadyToAssign = false, protectedGroups = [] } = options;
   const sim = new Simulation(model);
   const repairs: Repair[] = [];
   const unresolved: Unresolved[] = [];
@@ -382,13 +389,6 @@ export function planRepairs(model: BudgetModel, findings: Findings, options: Rep
     return model.monthCategory(month, categoryId) !== undefined;
   };
 
-  /** The earliest month after `month` from which RTA stays at or above `amount`. */
-  const absorbingMonth = (month: string, amount: number): string | null => {
-    for (let m = addMonths(month, 1); m <= lastMonth; m = addMonths(m, 1)) {
-      if (sim.minReadyToAssignFrom(m) >= amount) return m;
-    }
-    return null;
-  };
 
   interface Bridge {
     giveBack: string;
@@ -462,18 +462,44 @@ export function planRepairs(model: BudgetModel, findings: Findings, options: Rep
     }
   }
 
-  const blockedReason = (month: string) => {
-    const worst = sim.worstMonthFrom(month);
-    const rta = worst ? sim.readyToAssign(worst) : 0;
-    return rta < 0
-      ? `blocked by negative Ready to Assign in ${worst?.substring(0, 7)} (${formatCurrency(rta)}); fix that first`
-      : `Ready to Assign from ${month.substring(0, 7)} on is only ${formatCurrency(rta)} and too little unused money to bridge`;
+  /** A past month that was already short before this plan: settled history, unless strict. */
+  const settled = (m: string) => !strictReadyToAssign && m < current && (model.toBeBudgeted.get(m) ?? 0) < 0;
+
+  /**
+   * The month that stops `amount` being assigned in `month`, or null when it can be:
+   * every month from then on keeps Ready to Assign at or above zero, except settled ones.
+   */
+  const blockingMonth = (month: string, amount: number): string | null => {
+    for (const m of model.months) {
+      if (m < month || settled(m)) continue;
+      if (sim.readyToAssign(m) - amount < 0) return m;
+    }
+    return null;
+  };
+
+  /** The earliest month after `month` from which RTA stays at or above `amount` (settled months aside). */
+  const absorbingMonth = (month: string, amount: number): string | null => {
+    for (let m = addMonths(month, 1); m <= lastMonth; m = addMonths(m, 1)) {
+      if (blockingMonth(m, amount) === null) return m;
+    }
+    return null;
+  };
+
+  const blockedReason = (month: string, amount: number) => {
+    const short = model.months.filter((m) => m >= month && !settled(m) && sim.readyToAssign(m) - amount < 0);
+    const first = short[0] ?? sim.worstMonthFrom(month);
+    const rta = first ? sim.readyToAssign(first) : 0;
+    if (rta < 0) return `blocked by negative Ready to Assign in ${first?.substring(0, 7)} (${formatCurrency(rta)}); fix that first`;
+    const where = short.length > 1
+      ? `${short.length} months (${short[0]!.substring(0, 7)} to ${short[short.length - 1]!.substring(0, 7)}; ${first!.substring(0, 7)} has ${formatCurrency(rta)})`
+      : `${(first ?? month).substring(0, 7)} (it has ${formatCurrency(rta)})`;
+    return `covering it would push Ready to Assign below zero in ${where}, and no category held enough unused money over that time to bridge it`;
   };
 
   /** Fund `amount` into a category in a month: RTA first, then a bridge. Returns what was funded. */
   const fund = (kind: RepairKind, month: string, categoryId: string, label: string, amount: number): number => {
     const before = sim.netChanges();
-    if (sim.minReadyToAssignFrom(month) >= amount || allowNegativeReadyToAssign) {
+    if (blockingMonth(month, amount) === null || allowNegativeReadyToAssign) {
       sim.change(month, categoryId, amount);
       repairs.push({
         kind, month, categoryId, label, amount, method: "ready_to_assign", sources: [],
@@ -503,7 +529,7 @@ export function planRepairs(model: BudgetModel, findings: Findings, options: Rep
         label: o.category,
         amount: o.amount,
         shortBy: o.amount - funded,
-        reason: blockedReason(o.month),
+        reason: blockedReason(o.month, o.amount - funded),
       });
     }
   }
@@ -535,7 +561,7 @@ export function planRepairs(model: BudgetModel, findings: Findings, options: Rep
           blocked = true;
           unresolved.push({
             kind: "card_gap", month: m.month, categoryId: card.paymentCategoryId, label, amount: m.change,
-            shortBy: m.change - funded, reason: blockedReason(m.month),
+            shortBy: m.change - funded, reason: blockedReason(m.month, m.change - funded),
           });
         }
       }

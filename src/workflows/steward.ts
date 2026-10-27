@@ -33,7 +33,7 @@ export function registerStewardTools(server: McpServer) {
       "behind; cash ones come out of the next month's Ready to Assign, credit ones become card debt), months whose " +
       "Ready to Assign went negative, uncategorized spending, and every month-end where a card's payment category " +
       "Available differs from what the card owes. Plans repairs: cover from Ready to Assign when that month and every " +
-      "later one can afford it, otherwise 'bridge' from categories holding unused money and give it back when Ready " +
+      "later one can afford it (a past month already negative is settled history and does not block), otherwise 'bridge' from categories holding unused money and give it back when Ready " +
       "to Assign can absorb it, so today's balances are unchanged. Card gaps are planned once no credit cover is " +
       "pending (run again after applying). apply=true writes the plan (assigned amounts in past months).",
     inputSchema: z.object({
@@ -42,6 +42,7 @@ export function registerStewardTools(server: McpServer) {
       include_current_month: z.boolean().default(true).describe("Also cover the current month's overspending"),
       apply: z.boolean().default(false).describe("Write the repair plan (default false: audit only)"),
       allow_negative_ready_to_assign: z.boolean().default(false).describe("Last resort: cover even when Ready to Assign goes negative somewhere"),
+      strict_ready_to_assign: z.boolean().default(false).describe("Also refuse to lower a past month whose Ready to Assign is already negative (default: such a month is settled history and may go further negative; months at or above zero, and the current month on, never go negative)"),
       protected_groups: z.array(z.string()).default([]).describe("Category group names never used as bridge sources"),
       max_writes: z.number().int().default(60).describe("Stop applying after this many writes (whole repairs only)"),
       today,
@@ -58,6 +59,7 @@ export function registerStewardTools(server: McpServer) {
       });
       const plan = planRepairs(model, findings, {
         allowNegativeReadyToAssign: args.allow_negative_ready_to_assign,
+        strictReadyToAssign: args.strict_ready_to_assign,
         protectedGroups: args.protected_groups,
       });
       const applied = args.apply ? await applyRepairs(snapshot.budgetId, model, plan.repairs, args.max_writes) : null;

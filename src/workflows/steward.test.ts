@@ -114,6 +114,28 @@ test("a negative Ready to Assign month is bridged to the following month", () =>
   assert.equal(plan.unresolved.length, 0);
 });
 
+test("a past month already short of Ready to Assign does not block an earlier cover", () => {
+  const make = (tbb: number[]) => snapshot({
+    cells: { food: { "2026-01-01": { activity: -30_000, balance: -30_000 } } },
+    tbb,
+    transactions: [{ id: "t1", date: "2026-01-10", amount: -30_000, account: "chk", category: "food" }],
+  });
+  // February was over-assigned; March's income absorbed it.
+  const settled = new BudgetModel(make([100_000, -50_000, 400_000]), TODAY);
+  const plan = planRepairs(settled, findIntegrityProblems(settled));
+  assert.deepEqual(plan.repairs.map((r) => [r.kind, r.month, r.method]), [["overspend", "2026-01-01", "ready_to_assign"]]);
+  assert.deepEqual(plan.unresolved.map((u) => u.kind), ["rta_shortfall"]);
+  // Asked to be strict, February blocks it as before.
+  const strict = planRepairs(settled, findIntegrityProblems(settled), { strictReadyToAssign: true });
+  assert.equal(strict.repairs.length, 0);
+  assert.match(strict.unresolved.find((u) => u.kind === "overspend")!.reason, /negative Ready to Assign in 2026-02/);
+  // A month that is fine must stay fine: March cannot afford it.
+  const tight = new BudgetModel(make([100_000, -50_000, 10_000]), TODAY);
+  const blocked = planRepairs(tight, findIntegrityProblems(tight));
+  assert.equal(blocked.repairs.length, 0);
+  assert.match(blocked.unresolved.find((u) => u.kind === "overspend")!.reason, /below zero in 2026-03 \(it has \$10\.00\)/);
+});
+
 test("with no covers pending, a card gap is assigned to the payment category in its month", () => {
   const snap = snapshot({
     cells: { "card-pay": { "2026-01-01": { balance: 40_000 }, "2026-02-01": { balance: 40_000 }, "2026-03-01": { balance: 40_000 } } },

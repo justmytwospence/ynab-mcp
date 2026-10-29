@@ -95,15 +95,22 @@ const ESPLORA = [ENDPOINTS.mempool, "https://blockstream.info/api"];
 let esploraTurn = 0;
 const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
 
+// Paced: the explorers rate-limit by IP, and a wallet scan is tens of lookups.
+let lastEsplora = 0;
+const PACE_MS = 400;
+
 async function esplora(path: string, fetchImpl: Fetch): Promise<any> {
   for (let attempt = 0; ; attempt++) {
+    const wait = lastEsplora + PACE_MS - Date.now();
+    if (wait > 0 && fetchImpl === fetch) await sleep(wait);
+    lastEsplora = Date.now();
     const base = ESPLORA[esploraTurn++ % ESPLORA.length]!;
     try {
       return await getJson(fetchImpl, `${base}${path}`);
     } catch (e: any) {
       const retryable = /HTTP 429|HTTP 5\d\d/.test(String(e?.message)) || e?.name === "TimeoutError" || e?.name === "TypeError";
-      if (!retryable || attempt >= 5) throw e;
-      await sleep(1000 * 2 ** attempt);
+      if (!retryable || attempt >= 3) throw e;
+      await sleep(2000 * (attempt + 1));
     }
   }
 }
@@ -114,19 +121,36 @@ async function addressStats(address: string, fetchImpl: Fetch): Promise<{ sats: 
   return { sats: Number(c.funded_txo_sum) - Number(c.spent_txo_sum), used: Number(c.tx_count) + Number(d.mempool_stats?.tx_count ?? 0) > 0 };
 }
 
-/** Confirmed balance of a whole HD wallet: both chains, until GAP unused addresses in a row. */
-async function extendedKeySats(key: string, fetchImpl: Fetch): Promise<number> {
-  let total = 0;
+// One scan per wallet per 15 minutes: a reconcile run asks for balances, then for history.
+const SCAN_TTL_MS = 15 * 60_000;
+const scans = new Map<string, { at: number; sats: number; mine: string[]; used: string[] }>();
+
+/** Every address of an HD wallet up to the gap, which of them were used, and the confirmed balance. */
+async function scanWallet(key: string, fetchImpl: Fetch): Promise<{ sats: number; mine: string[]; used: string[] }> {
+  const hit = scans.get(key);
+  if (hit && Date.now() - hit.at < SCAN_TTL_MS && fetchImpl === fetch) return hit;
+  let sats = 0;
+  const mine: string[] = [];
+  const used: string[] = [];
   for (const chain of [0, 1] as const) {
     let unused = 0;
     for (let index = 0; unused < GAP; index++) {
-      const s = await addressStats(deriveAddress(key, chain, index), fetchImpl);
-      total += s.sats;
-      unused = s.used ? 0 : unused + 1;
+      const a = deriveAddress(key, chain, index);
+      const s = await addressStats(a, fetchImpl);
+      mine.push(a);
+      sats += s.sats;
+      if (s.used) { used.push(a); unused = 0; } else unused++;
       if (index > 10_000) throw new Error("extended key scan did not end");
     }
   }
-  return total;
+  const out = { at: Date.now(), sats, mine, used };
+  scans.set(key, out);
+  return out;
+}
+
+/** Confirmed balance of a whole HD wallet: both chains, until GAP unused addresses in a row. */
+async function extendedKeySats(key: string, fetchImpl: Fetch): Promise<number> {
+  return (await scanWallet(key, fetchImpl)).sats;
 }
 
 export function isExtendedKey(address: string): boolean {
@@ -236,14 +260,9 @@ export async function btcMovements(address: string, since: string, fetchImpl: Fe
   const mine = new Set<string>();
   const used: string[] = [];
   if (isExtendedKey(address)) {
-    for (const chain of [0, 1] as const) {
-      let unused = 0;
-      for (let index = 0; unused < GAP; index++) {
-        const a = deriveAddress(address, chain, index);
-        mine.add(a);
-        if ((await addressStats(a, fetchImpl)).used) { used.push(a); unused = 0; } else unused++;
-      }
-    }
+    const w = await scanWallet(address, fetchImpl);
+    for (const a of w.mine) mine.add(a);
+    used.push(...w.used);
   } else {
     mine.add(address);
     used.push(address);

@@ -29,6 +29,7 @@ at `http://<host>:8000/mcp` (also at `/`), with a health check at `/health`, and
 | `PORT` | `8000` | HTTP port |
 | `AMAZON_ORDERS_URL`, `AMAZON_ORDERS_TOKEN` | (unset) | An amazon-orders service (see the homelab repo); enables `amazon_order` and `amazon_receipts` |
 | `RECONCILE_MAP` | (unset) | Where each tracking account's real balance comes from; enables `get_tracking_balances`. See [Tracking balances](#tracking-balances) |
+| `BITCOIN_RPC_URL`, `BITCOIN_RPC_USER`, `BITCOIN_RPC_PASSWORD`, `ETH_RPC_URL` | (unset) | Your own bitcoind and Ethereum RPC for crypto balances, instead of public services |
 | `PLAID_CLIENT_ID`, `PLAID_SECRET`, `PLAID_TOKENS`, `PLAID_ENV` | (unset), `production` | Read-only Plaid access for investment accounts in `RECONCILE_MAP` |
 | `YNAB_MCP_AI_FLAG` | (unset: off) | A flag color (`purple`, ...) put on every transaction this server creates or edits; see "AI flag" |
 | `YNAB_MCP_STATE_DIR` | `./state` (`/data` in the image) | Where enrich_transactions remembers item categories; mount a volume |
@@ -131,9 +132,18 @@ which reconciles the account the way YNAB's own reconcile does.
 ]
 ```
 
-**Crypto** uses public data only: BTC addresses, or an xpub/ypub/zpub whose addresses are
-derived locally (receive and change, gap limit 20), looked up on mempool.space and
-blockstream.info; a public Ethereum RPC; Solana's public RPC; and CoinGecko prices. Nothing here can sign or move funds.
+**Crypto** reads public data only, preferring your own nodes:
+
+- BTC: with `BITCOIN_RPC_URL`, `BITCOIN_RPC_USER` and `BITCOIN_RPC_PASSWORD`, your own
+  bitcoind's `scantxoutset` over its UTXO set (works pruned; an x/y/z pub becomes receive
+  and change descriptors, range 0-999). Whitelist that user to `getblockchaininfo` and
+  `scantxoutset` only (`rpcwhitelist`); the client refuses any other method too. Until the
+  node is synced, and without one, addresses (an x/y/z pub's derived locally, gap limit 20)
+  are looked up on mempool.space and blockstream.info.
+- ETH and ERC-20: `ETH_RPC_URL` (for example a Helios light client), else a public node.
+- SOL: Solana's public RPC. Prices: CoinGecko.
+
+Each wallet line in `get_tracking_balances` says where it was read. Nothing here can sign or move funds.
 
 **Investment accounts** use Plaid's free Trial plan, read-only:
 

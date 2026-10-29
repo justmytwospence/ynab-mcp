@@ -16,6 +16,7 @@ import { HDKey } from "@scure/bip32";
 import { bech32, createBase58check } from "@scure/base";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { ripemd160 } from "@noble/hashes/legacy.js";
+import { nodeConfigured, nodeReady, scanSats } from "./bitcoind.js";
 
 export type Chain = "btc" | "eth" | "sol";
 
@@ -33,6 +34,8 @@ export interface WalletBalance {
   amount: number;
   price: number;
   usd: number;
+  /** Where the amount was read. */
+  via: string;
 }
 
 const NATIVE: Record<Chain, { coingecko: string; symbol: string }> = {
@@ -130,25 +133,36 @@ export function isExtendedKey(address: string): boolean {
   return /^[xyz]pub[1-9A-HJ-NP-Za-km-z]{100,}$/.test(address);
 }
 
-/** Native or token amount held, in whole units. */
-export async function walletAmount(w: WalletSpec, fetchImpl: Fetch = fetch): Promise<number> {
+/**
+ * Native or token amount held, in whole units, and where it was read.
+ * BTC: our own bitcoind when BITCOIN_RPC_* is set and the node is synced, else the public
+ * explorers. ETH: ETH_RPC_URL (our Helios light client) when set, else a public node.
+ */
+export async function walletAmount(w: WalletSpec, fetchImpl: Fetch = fetch, env = process.env): Promise<{ amount: number; via: string }> {
   if (w.chain === "btc") {
-    if (isExtendedKey(w.address)) return (await extendedKeySats(w.address, fetchImpl)) / 1e8;
-    return (await addressStats(w.address, fetchImpl)).sats / 1e8;
+    if (nodeConfigured(env)) {
+      if (await nodeReady(env, fetchImpl)) return { amount: (await scanSats(w.address, env, fetchImpl)) / 1e8, via: "our bitcoind" };
+      const amount = isExtendedKey(w.address) ? (await extendedKeySats(w.address, fetchImpl)) / 1e8 : (await addressStats(w.address, fetchImpl)).sats / 1e8;
+      return { amount, via: "public explorers (our node is still syncing)" };
+    }
+    const amount = isExtendedKey(w.address) ? (await extendedKeySats(w.address, fetchImpl)) / 1e8 : (await addressStats(w.address, fetchImpl)).sats / 1e8;
+    return { amount, via: "public explorers" };
   }
   if (w.chain === "eth") {
+    const url = env.ETH_RPC_URL || ENDPOINTS.eth;
+    const via = env.ETH_RPC_URL ? "our Helios light client" : "a public Ethereum node";
     if (!/^0x[0-9a-fA-F]{40}$/.test(w.address)) throw new Error(`not an Ethereum address: ${w.address}`);
     if (w.token) {
       const data = "0x70a08231" + w.address.slice(2).toLowerCase().padStart(64, "0");
-      const hex = await rpc(fetchImpl, ENDPOINTS.eth, "eth_call", [{ to: w.token.contract, data }, "latest"]);
-      return unitsToNumber(BigInt(hex === "0x" ? 0 : hex), w.token.decimals);
+      const hex = await rpc(fetchImpl, url, "eth_call", [{ to: w.token.contract, data }, "latest"]);
+      return { amount: unitsToNumber(BigInt(hex === "0x" ? 0 : hex), w.token.decimals), via };
     }
-    const hex = await rpc(fetchImpl, ENDPOINTS.eth, "eth_getBalance", [w.address, "latest"]);
-    return unitsToNumber(BigInt(hex), 18);
+    const hex = await rpc(fetchImpl, url, "eth_getBalance", [w.address, "latest"]);
+    return { amount: unitsToNumber(BigInt(hex), 18), via };
   }
   if (w.chain === "sol") {
     const r = await rpc(fetchImpl, ENDPOINTS.sol, "getBalance", [w.address, { commitment: "finalized" }]);
-    return Number(r.value) / 1e9;
+    return { amount: Number(r.value) / 1e9, via: "Solana's public RPC" };
   }
   throw new Error(`unsupported chain: ${(w as WalletSpec).chain}`);
 }
@@ -178,14 +192,14 @@ export function priceId(w: WalletSpec): string {
 }
 
 /** Every wallet's amount and dollar value. Throws if any one fails: a partial sum is a wrong balance. */
-export async function walletBalances(wallets: WalletSpec[], fetchImpl: Fetch = fetch): Promise<WalletBalance[]> {
+export async function walletBalances(wallets: WalletSpec[], fetchImpl: Fetch = fetch, env = process.env): Promise<WalletBalance[]> {
   const [amounts, px] = await Promise.all([
-    Promise.all(wallets.map((w) => walletAmount(w, fetchImpl))),
+    Promise.all(wallets.map((w) => walletAmount(w, fetchImpl, env))),
     prices(wallets.map(priceId), fetchImpl),
   ]);
   return wallets.map((w, i) => {
     const price = px[priceId(w)]!;
-    const amount = amounts[i]!;
+    const { amount, via } = amounts[i]!;
     return {
       chain: w.chain,
       address: w.address,
@@ -193,6 +207,7 @@ export async function walletBalances(wallets: WalletSpec[], fetchImpl: Fetch = f
       amount,
       price,
       usd: Math.round(amount * price * 100) / 100,
+      via,
     };
   });
 }

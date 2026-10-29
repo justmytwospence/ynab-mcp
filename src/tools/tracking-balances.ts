@@ -83,7 +83,7 @@ export async function trackingBalances(
           const wallets: WalletBalance[] = await fetchWallets(s.wallets!);
           for (const w of wallets) {
             dollars += w.usd;
-            out.detail.push(`${w.amount} ${w.symbol} @ $${w.price} = $${w.usd.toFixed(2)} (${w.chain} ${w.address.slice(0, 6)}…${w.address.slice(-4)})`);
+            out.detail.push(`${w.amount} ${w.symbol} @ $${w.price} = $${w.usd.toFixed(2)} (${w.chain} ${w.address.slice(0, 6)}…${w.address.slice(-4)}, via ${w.via})`);
           }
           out.asOf = new Date().toISOString();
         }

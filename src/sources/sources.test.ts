@@ -149,7 +149,7 @@ test("trackingBalances: sums masks, isolates failures, computes the adjustment",
           { accountId: "2", mask: "2", name: "B", balance: 500.25, currency: "USD", holdingsValue: 500, asOf: "2026-10-25" },
         ];
       },
-      fetchWallets: async () => [{ chain: "btc", address: "bc1", symbol: "BTC", amount: 0.001, price: 100000, usd: 100 }],
+      fetchWallets: async () => [{ chain: "btc", address: "bc1", symbol: "BTC", amount: 0.001, price: 100000, usd: 100, via: "test" }],
     }
   );
   assert.equal(plaidCalls, 1);
@@ -161,4 +161,57 @@ test("trackingBalances: sums masks, isolates failures, computes the adjustment",
   assert.equal(crypto!.difference, 0);
   assert.match(hsa!.error!, /no PLAID_TOKENS entry "fidelity"/);
   assert.match(gone!.error!, /no open YNAB account/);
+});
+
+test("bitcoind: allowlist, descriptors, ready and syncing paths", async () => {
+  const { rpc, descriptors, METHODS } = await import("./bitcoind.js");
+  assert.deepEqual([...METHODS], ["getblockchaininfo", "scantxoutset"]);
+  const benv = { BITCOIN_RPC_URL: "http://bitcoind:8332", BITCOIN_RPC_USER: "ynab", BITCOIN_RPC_PASSWORD: "pw" } as NodeJS.ProcessEnv;
+  for (const m of ["getbalance", "listwallets", "stop", "sendtoaddress", "dumpprivkey"]) {
+    await assert.rejects(() => rpc(m as any, [], benv, (async () => { throw new Error("no call"); }) as any), /not allowed/);
+  }
+  // The BIP84 account's xpub form, as `bip32 -> xpub` re-encodes it.
+  const d = descriptors(ZPUB) as Array<{ desc: string; range: number }>;
+  assert.match(d[0]!.desc, /^wpkh\(xpub[1-9A-HJ-NP-Za-km-z]+\/0\/\*\)$/);
+  assert.match(d[1]!.desc, /\/1\/\*\)$/);
+  assert.equal(d[0]!.range, 999);
+  assert.deepEqual(descriptors("bc1qexample"), ["addr(bc1qexample)"]);
+  const { HDKey } = await import("@scure/bip32");
+  const fromX = HDKey.fromExtendedKey(d[0]!.desc.slice(5, -5));
+  const fromZ = HDKey.fromExtendedKey(ZPUB, { public: 0x04b24746, private: 0x04b2430c });
+  assert.deepEqual(fromX.publicKey, fromZ.publicKey);
+
+  let ready = false;
+  let scans = 0;
+  const { f, calls } = jsonFetch((url, body) => {
+    if (url.startsWith("http://bitcoind")) {
+      if (body.method === "getblockchaininfo") return { body: { result: { initialblockdownload: !ready, verificationprogress: ready ? 0.99999 : 0.4 }, error: null } };
+      scans++;
+      if (scans === 1) return { status: 500, body: { result: null, error: { code: -8, message: "Scan already in progress, use action \"abort\" or \"status\"" } } };
+      return { body: { result: { success: true, total_amount: 0.5 }, error: null } };
+    }
+    if (url.includes("coingecko")) return { body: { bitcoin: { usd: 100000 } } };
+    if (url.includes("mempool.space") || url.includes("blockstream.info")) return { body: { chain_stats: { funded_txo_sum: 1000, spent_txo_sum: 0, tx_count: 1 } } };
+    throw new Error(url);
+  });
+  const { walletBalances: wb } = await import("./crypto.js");
+  const syncing = await wb([{ chain: "btc", address: "bc1qexample" }], f, benv);
+  assert.equal(syncing[0]!.via, "public explorers (our node is still syncing)");
+  ready = true;
+  const { scanSats } = await import("./bitcoind.js");
+  assert.equal(await scanSats("bc1qexample", benv, f, 1), 50_000_000);
+  assert.equal(scans, 2);
+  const auth = calls.find((c) => c.url.startsWith("http://bitcoind"));
+  assert.ok(auth);
+});
+
+test("ETH_RPC_URL replaces the public node", async () => {
+  const { f, calls } = jsonFetch((url) => {
+    if (url.includes("coingecko")) return { body: { ethereum: { usd: 4000 } } };
+    return { body: { result: "0xde0b6b3a7640000" } };
+  });
+  const r = await walletBalances([{ chain: "eth", address: "0x" + "ab".repeat(20) }], f, { ETH_RPC_URL: "http://helios:8545" } as NodeJS.ProcessEnv);
+  assert.equal(r[0]!.via, "our Helios light client");
+  assert.ok(calls.some((c) => c.url === "http://helios:8545"));
+  assert.ok(!calls.some((c) => c.url.includes("publicnode")));
 });

@@ -213,3 +213,89 @@ export async function walletBalances(wallets: WalletSpec[], fetchImpl: Fetch = f
     };
   });
 }
+
+export interface Movement {
+  date: string;
+  txid: string;
+  chain: Chain;
+  symbol: string;
+  /** Net change to the wallet, in whole units (negative: sent). */
+  amount: number;
+  /** Price on that date and the movement's value then, in dollars. */
+  price: number;
+  usd: number;
+}
+
+/**
+ * BTC movements since a date (YYYY-MM-DD): each confirmed transaction that changed the
+ * wallet, netted across its addresses (a send's change output nets out). Read from the
+ * public explorers: a pruned node has no history. Callers ask only when the wallet's
+ * amount changed, so this runs rarely.
+ */
+export async function btcMovements(address: string, since: string, fetchImpl: Fetch = fetch): Promise<Array<{ date: string; txid: string; sats: number }>> {
+  const mine = new Set<string>();
+  const used: string[] = [];
+  if (isExtendedKey(address)) {
+    for (const chain of [0, 1] as const) {
+      let unused = 0;
+      for (let index = 0; unused < GAP; index++) {
+        const a = deriveAddress(address, chain, index);
+        mine.add(a);
+        if ((await addressStats(a, fetchImpl)).used) { used.push(a); unused = 0; } else unused++;
+      }
+    }
+  } else {
+    mine.add(address);
+    used.push(address);
+  }
+  const txs = new Map<string, any>();
+  for (const a of used) {
+    let path = `/address/${encodeURIComponent(a)}/txs`;
+    for (let page = 0; page < 40; page++) {
+      const list: any[] = await esplora(path, fetchImpl);
+      const confirmed = list.filter((t) => t.status?.confirmed);
+      for (const t of confirmed) txs.set(t.txid, t);
+      const oldest = confirmed[confirmed.length - 1];
+      if (!oldest || confirmed.length < 25 || dayOf(oldest.status.block_time) < since) break;
+      path = `/address/${encodeURIComponent(a)}/txs/chain/${oldest.txid}`;
+    }
+  }
+  const out: Array<{ date: string; txid: string; sats: number }> = [];
+  for (const t of txs.values()) {
+    const date = dayOf(t.status.block_time);
+    if (date < since) continue;
+    let sats = 0;
+    for (const o of t.vout ?? []) if (mine.has(o.scriptpubkey_address)) sats += Number(o.value);
+    for (const i of t.vin ?? []) if (i.prevout && mine.has(i.prevout.scriptpubkey_address)) sats -= Number(i.prevout.value);
+    if (sats !== 0) out.push({ date, txid: t.txid, sats });
+  }
+  return out.sort((a, b) => a.date.localeCompare(b.date) || a.txid.localeCompare(b.txid));
+}
+
+function dayOf(unix: number): string {
+  return new Date(unix * 1000).toISOString().slice(0, 10);
+}
+
+/** A coin's USD price on a past day (CoinGecko's daily history; free for the last year). */
+export async function priceOn(coingeckoId: string, date: string, fetchImpl: Fetch = fetch): Promise<number> {
+  const [y, m, d] = date.split("-");
+  const r = await getJson(fetchImpl, `${ENDPOINTS.coingecko}/coins/${encodeURIComponent(coingeckoId)}/history?date=${d}-${m}-${y}&localization=false`);
+  const p = r?.market_data?.current_price?.usd;
+  if (typeof p !== "number") throw new Error(`no CoinGecko price for ${coingeckoId} on ${date}`);
+  return p;
+}
+
+/** Movements of every wallet since a date, valued at that day's price. ETH and SOL history needs an indexer we do not have: skipped, and said. */
+export async function walletMovements(wallets: WalletSpec[], since: string, fetchImpl: Fetch = fetch): Promise<{ movements: Movement[]; unsupported: string[] }> {
+  const movements: Movement[] = [];
+  const unsupported: string[] = [];
+  for (const w of wallets) {
+    if (w.chain !== "btc") { unsupported.push(`${w.chain} ${w.address.slice(0, 6)}…${w.address.slice(-4)}`); continue; }
+    for (const m of await btcMovements(w.address, since, fetchImpl)) {
+      const price = await priceOn("bitcoin", m.date, fetchImpl);
+      const amount = m.sats / 1e8;
+      movements.push({ date: m.date, txid: m.txid, chain: "btc", symbol: "BTC", amount, price, usd: Math.round(amount * price * 100) / 100 });
+    }
+  }
+  return { movements, unsupported };
+}

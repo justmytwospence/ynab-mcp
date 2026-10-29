@@ -6,7 +6,7 @@ import { getClient } from "../ynab-client.js";
 import { textResult, errorResult, formatCurrency, dollarsToMilliunits } from "../utils/formatting.js";
 import { reconcileMap, type SourceSpec } from "../sources/config.js";
 import { investmentBalances, plaidTokens, type PlaidAccountBalance } from "../sources/plaid.js";
-import { walletBalances, type WalletBalance } from "../sources/crypto.js";
+import { walletBalances, walletMovements, type Movement, type WalletBalance } from "../sources/crypto.js";
 
 export interface TrackingBalance {
   account: string;
@@ -21,11 +21,18 @@ export interface TrackingBalance {
   asOf: string | null;
   detail: string[];
   error: string | null;
+  /** Wallet accounts: each wallet's amount, so a caller can tell a price move from a send. */
+  wallets?: WalletBalance[];
+  /** When asked for (history), on-chain movements since that date, valued then. */
+  movements?: Movement[];
+  /** Wallets whose history cannot be read (no indexer for that chain). */
+  historyUnsupported?: string[];
 }
 
 type Deps = {
   fetchPlaid?: (token: string) => Promise<PlaidAccountBalance[]>;
   fetchWallets?: typeof walletBalances;
+  fetchMovements?: typeof walletMovements;
 };
 
 /**
@@ -37,8 +44,10 @@ export async function trackingBalances(
   specs: SourceSpec[],
   ynabAccounts: Array<{ id: string; name: string; cleared_balance: number; uncleared_balance: number; deleted: boolean; closed: boolean }>,
   tokens: Record<string, string>,
-  deps: Deps = {}
+  deps: Deps = {},
+  history: Record<string, string> = {}
 ): Promise<TrackingBalance[]> {
+  const fetchMovements = deps.fetchMovements ?? walletMovements;
   const fetchPlaid = deps.fetchPlaid ?? ((t: string) => investmentBalances(t));
   const fetchWallets = deps.fetchWallets ?? walletBalances;
 
@@ -86,6 +95,14 @@ export async function trackingBalances(
             out.detail.push(`${w.amount} ${w.symbol} @ $${w.price} = $${w.usd.toFixed(2)} (${w.chain} ${w.address.slice(0, 6)}…${w.address.slice(-4)}, via ${w.via})`);
           }
           out.asOf = new Date().toISOString();
+          out.wallets = wallets;
+          const since = history[acct.id];
+          if (since) {
+            const h = await fetchMovements(s.wallets!, since);
+            out.movements = h.movements;
+            out.historyUnsupported = h.unsupported;
+            for (const m of h.movements) out.detail.push(`${m.date}: ${m.amount > 0 ? "+" : ""}${m.amount} ${m.symbol} (~$${m.usd.toFixed(2)} then) tx ${m.txid.slice(0, 10)}…`);
+          }
         }
         out.sourceBalance = dollarsToMilliunits(Math.round(dollars * 100) / 100);
         out.difference = out.sourceBalance - acct.cleared_balance;
@@ -108,13 +125,18 @@ export function registerTrackingBalanceTools(server: McpServer) {
       "call audit_account_reconciliation with target_balance. Changes nothing.",
     inputSchema: z.object({
       budget_id: z.string().default("last-used").describe("Budget ID or 'last-used'"),
+      history: z.record(z.string(), z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).optional().describe(
+        "For wallet accounts: YNAB account id -> YYYY-MM-DD. Also returns the on-chain movements (BTC) since " +
+        "that date, each valued at that day's price, so sends and receives can be booked on their own dates. " +
+        "Uses public explorers; ask only when a wallet's amount changed."
+      ),
     }),
     annotations: { readOnlyHint: true },
-  }, async ({ budget_id }) => {
+  }, async ({ budget_id, history }) => {
     try {
       apiUsageTracker.assertAvailable(1);
       const res = await getClient().accounts.getAccounts(budget_id);
-      const rows = await trackingBalances(reconcileMap(), res.data.accounts, plaidTokens());
+      const rows = await trackingBalances(reconcileMap(), res.data.accounts, plaidTokens(), {}, history ?? {});
       const lines = ["Tracking account balances:"];
       for (const r of rows) {
         if (r.error) { lines.push(`  ${r.account}: ERROR ${r.error}`); continue; }

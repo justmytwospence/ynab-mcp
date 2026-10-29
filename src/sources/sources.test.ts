@@ -220,3 +220,19 @@ test("ETH_RPC_URL replaces the public node", async () => {
   assert.ok(calls.some((c) => c.url === "http://helios:8545"));
   assert.ok(!calls.some((c) => c.url.includes("publicnode")));
 });
+
+test("btcMovements: nets a transaction across the wallet's addresses, since a date", async () => {
+  const { btcMovements } = await import("./crypto.js");
+  const day = (d: string) => Date.parse(d + "T12:00:00Z") / 1000;
+  const a = "bc1qmine", other = "bc1qother";
+  const { f } = jsonFetch((url) => {
+    if (url.includes("/txs")) return { body: [
+      // Sent 0.3 to someone, 0.19999 back as change, 1000 sats fee: net -0.30001
+      { txid: "t3", status: { confirmed: true, block_time: day("2026-09-10") }, vin: [{ prevout: { scriptpubkey_address: a, value: 50_000_000 } }], vout: [{ scriptpubkey_address: other, value: 30_000_000 }, { scriptpubkey_address: a, value: 19_999_000 }] },
+      { txid: "t2", status: { confirmed: true, block_time: day("2026-08-01") }, vin: [], vout: [{ scriptpubkey_address: a, value: 50_000_000 }] },
+      { txid: "t1", status: { confirmed: false }, vin: [], vout: [{ scriptpubkey_address: a, value: 1 }] },
+    ] };
+    throw new Error(url);
+  });
+  assert.deepEqual(await btcMovements(a, "2026-08-07", f), [{ date: "2026-09-10", txid: "t3", sats: -30_001_000 }]);
+});

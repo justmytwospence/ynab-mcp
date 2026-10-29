@@ -61,14 +61,29 @@ test("Plaid: investment balances per account with a holdings cross-check", async
   ]);
 });
 
+// BIP84 test vector (mnemonic "abandon ... about"), account 0.
+const ZPUB = "zpub6rFR7y4Q2AijBEqTUquhVz398htDFrtymD9xYYfG1m4wAcvPhXNfE3EfH1r1ADqtfSdVCToUG868RvUUkgDKf31mGDtKsAYz2oz2AGutZYs";
+const firstZ = "bc1qcr8te4kr609gcawutmrza0j4xv80jy8z306fyu";
+
+test("crypto: BIP84 derivation matches the test vectors", async () => {
+  const { deriveAddress } = await import("./crypto.js");
+  assert.equal(deriveAddress(ZPUB, 0, 0), firstZ);
+  assert.equal(deriveAddress(ZPUB, 0, 1), "bc1qnjg0jd8228aq7egyzacy8cys3knf9xvrerkf9g");
+  assert.equal(deriveAddress(ZPUB, 1, 0), "bc1q8c6fshw2dlwun7ekn9qwf37cu2rn755upcp6el");
+});
+
 test("crypto: address and xpub lookups, units and prices", async () => {
   assert.equal(unitsToNumber(1234567890000000000n, 18), 1.23456789);
   assert.equal(isExtendedKey("zpub" + "A".repeat(107)), true);
   assert.equal(isExtendedKey("bc1qxyz"), false);
   const { f, calls } = jsonFetch((url, body) => {
     if (url.includes("coingecko")) return { body: { bitcoin: { usd: 100000 }, ethereum: { usd: 4000 }, solana: { usd: 200 }, "usd-coin": { usd: 1 } } };
-    if (url.includes("mempool.space")) return { body: { chain_stats: { funded_txo_sum: 150_000_000, spent_txo_sum: 50_000_000 } } };
-    if (url.includes("blockchain.info")) return { body: { wallet: { final_balance: 25_000_000 } } };
+    if (url.includes("mempool.space") || url.includes("blockstream.info")) {
+      // The first receive address of the test zpub holds 0.25 BTC; the plain address 1 BTC.
+      if (url.endsWith(`/address/${firstZ}`)) return { body: { chain_stats: { funded_txo_sum: 25_000_000, spent_txo_sum: 0, tx_count: 1 } } };
+      if (url.endsWith("/address/bc1qexample")) return { body: { chain_stats: { funded_txo_sum: 150_000_000, spent_txo_sum: 50_000_000, tx_count: 2 } } };
+      return { body: { chain_stats: { funded_txo_sum: 0, spent_txo_sum: 0, tx_count: 0 } } };
+    }
     if (url.includes("publicnode")) {
       if (body.method === "eth_getBalance") return { body: { result: "0xde0b6b3a7640000" } }; // 1 ETH
       return { body: { result: "0x" + (2_500_000n).toString(16) } }; // 2.5 USDC
@@ -79,7 +94,7 @@ test("crypto: address and xpub lookups, units and prices", async () => {
   const addr = "0x" + "ab".repeat(20);
   const r = await walletBalances([
     { chain: "btc", address: "bc1qexample" },
-    { chain: "btc", address: "zpub" + "A".repeat(107) },
+    { chain: "btc", address: ZPUB },
     { chain: "eth", address: addr },
     { chain: "eth", address: addr, token: { contract: "0xA0b8", decimals: 6, coingecko: "usd-coin", symbol: "USDC" } },
     { chain: "sol", address: "So1ana" },

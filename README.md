@@ -131,9 +131,9 @@ which reconciles the account the way YNAB's own reconcile does.
 ]
 ```
 
-**Crypto** uses public data only: mempool.space (BTC address), blockchain.info (BTC
-xpub/ypub/zpub; it learns the wallet's addresses), a public Ethereum RPC, Solana's public RPC,
-and CoinGecko prices. Nothing here can sign or move funds.
+**Crypto** uses public data only: BTC addresses, or an xpub/ypub/zpub whose addresses are
+derived locally (receive and change, gap limit 20), looked up on mempool.space and
+blockstream.info; a public Ethereum RPC; Solana's public RPC; and CoinGecko prices. Nothing here can sign or move funds.
 
 **Investment accounts** use Plaid's free Trial plan, read-only:
 

@@ -197,6 +197,11 @@ test("bitcoind: allowlist, descriptors, ready and syncing paths", async () => {
   const { walletBalances: wb } = await import("./crypto.js");
   const syncing = await wb([{ chain: "btc", address: "bc1qexample" }], f, benv);
   assert.equal(syncing[0]!.via, "public explorers (our node is still syncing)");
+  const down = await wb([{ chain: "btc", address: "bc1qexample" }], (async (url: string, init?: RequestInit) => {
+    if (String(url).startsWith("http://bitcoind")) throw new TypeError("fetch failed");
+    return f(url, init);
+  }) as typeof fetch, benv);
+  assert.equal(down[0]!.via, "public explorers (our node is not answering)");
   ready = true;
   const { scanSats } = await import("./bitcoind.js");
   assert.equal(await scanSats("bc1qexample", benv, f, 1), 50_000_000);

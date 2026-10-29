@@ -36,7 +36,7 @@ export async function rpc(method: Method, params: unknown[], env = process.env, 
 
 /** Synced far enough that its UTXO set is today's. */
 export async function nodeReady(env = process.env, fetchImpl: Fetch = fetch): Promise<boolean> {
-  const info = await rpc("getblockchaininfo", [], env, fetchImpl);
+  const info = await rpc("getblockchaininfo", [], env, fetchImpl, 10_000);
   return info.initialblockdownload === false && Number(info.verificationprogress) > 0.9999;
 }
 

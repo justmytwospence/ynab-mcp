@@ -141,9 +141,11 @@ export function isExtendedKey(address: string): boolean {
 export async function walletAmount(w: WalletSpec, fetchImpl: Fetch = fetch, env = process.env): Promise<{ amount: number; via: string }> {
   if (w.chain === "btc") {
     if (nodeConfigured(env)) {
-      if (await nodeReady(env, fetchImpl)) return { amount: (await scanSats(w.address, env, fetchImpl)) / 1e8, via: "our bitcoind" };
+      // A node that is syncing, or paused by its sync window (no answer at all), falls back.
+      const ready = await nodeReady(env, fetchImpl).then((r) => (r ? "ready" : "syncing"), () => "unreachable");
+      if (ready === "ready") return { amount: (await scanSats(w.address, env, fetchImpl)) / 1e8, via: "our bitcoind" };
       const amount = isExtendedKey(w.address) ? (await extendedKeySats(w.address, fetchImpl)) / 1e8 : (await addressStats(w.address, fetchImpl)).sats / 1e8;
-      return { amount, via: "public explorers (our node is still syncing)" };
+      return { amount, via: `public explorers (our node is ${ready === "syncing" ? "still syncing" : "not answering"})` };
     }
     const amount = isExtendedKey(w.address) ? (await extendedKeySats(w.address, fetchImpl)) / 1e8 : (await addressStats(w.address, fetchImpl)).sats / 1e8;
     return { amount, via: "public explorers" };

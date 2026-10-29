@@ -8,15 +8,18 @@
  * `link` prints a Plaid Hosted Link URL. Open it, sign in at your institution, and
  * pick the accounts to share. The CLI then vets the new link and keeps it only if:
  *   1. the institution uses OAuth (Plaid never saw your password),
- *   2. the link consents to investments only (no auth, identity, transfer, ...),
- *   3. Auth (account and routing numbers) and Identity are refused for it.
+ *   2. the link consents to nothing beyond investments and identity (no auth, transfer, ...),
+ *   3. Auth (account and routing numbers) is refused for it.
  * Otherwise it removes the link at Plaid and exits non-zero. On success it prints the
  * access token once, for PLAID_TOKENS in the stack's .env, and the account masks for
  * RECONCILE_MAP.
  */
 import { plaidLink, investmentBalances, PlaidError } from "./sources/plaid.js";
 
-const ALLOWED_CONSENT = new Set(["investments", "balance"]);
+// Identity (name, address, email, phone) is accepted: Fidelity's links carry it, it cannot
+// move money, and the server's allowlist never requests it. Auth (account and routing
+// numbers), transfer and the rest are not.
+const ALLOWED_CONSENT = new Set(["investments", "balance", "identity", "identity_match"]);
 
 function die(msg: string): never {
   console.error(msg);
@@ -32,7 +35,7 @@ async function search(query: string) {
   for (const i of r.institutions ?? []) console.log(`${i.institution_id}  oauth=${i.oauth}  ${i.name}`);
 }
 
-async function refused(path: "/auth/get" | "/identity/get", accessToken: string): Promise<string | null> {
+async function refused(path: "/auth/get", accessToken: string): Promise<string | null> {
   try {
     await plaidLink(path, { access_token: accessToken });
     return null;
@@ -83,7 +86,7 @@ async function link() {
   const extra = consented.filter((p) => !ALLOWED_CONSENT.has(p));
   if (extra.length) await remove(`the link consents to more than investments: ${extra.join(", ")}`);
 
-  for (const path of ["/auth/get", "/identity/get"] as const) {
+  for (const path of ["/auth/get"] as const) {
     const code = await refused(path, accessToken);
     if (!code) await remove(`${path} succeeded; the link can read more than investments.`);
     console.log(`${path} refused (${code}), as required.`);

@@ -21,9 +21,8 @@ export const LINK_PATHS = [
   "/item/remove",
   "/institutions/get_by_id",
   "/institutions/search",
-  // Called only to prove they are refused for an investments-only link.
+  // Called only to prove Auth is refused for the new link.
   "/auth/get",
-  "/identity/get",
 ] as const;
 
 type ReadPath = (typeof READ_PATHS)[number];

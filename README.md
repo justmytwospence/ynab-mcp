@@ -142,8 +142,9 @@ and CoinGecko prices. Nothing here can sign or move funds.
   trades or withdraws from an investment account.
 - Links are made with `node dist/plaid-link.js link` in the container. It asks Plaid for
   `investments` only, then keeps the link only if the institution uses OAuth (Plaid never sees
-  your password), the link consents to nothing beyond investments, and `/auth/get` (account and
-  routing numbers) and `/identity/get` are refused. Otherwise it removes the link. `search <name>`
+  your password), the link consents to nothing beyond investments and identity (Fidelity's
+  links carry identity; the server never requests it), and `/auth/get` (account and routing
+  numbers) is refused. Otherwise it removes the link. `search <name>`
   shows whether an institution links through OAuth before you try.
 - `PLAID_TOKENS` is a JSON object of link name to access token. Keep it with the YNAB token;
   errors never include it. Revoke a link at my.plaid.com or at the institution (Fidelity

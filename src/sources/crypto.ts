@@ -1,10 +1,11 @@
 /**
- * Crypto wallet balances from public data only: addresses (or a BTC extended
- * public key) and public prices. No keys, accounts or API tokens exist here, so
- * nothing in this module can sign or move anything.
+ * Read-only crypto balances: indexed BTCPay wallets when mapped, otherwise public
+ * addresses (or BTC extended public keys), our node, and public prices. Nothing
+ * in this module can sign or move anything.
  *
- * - BTC address: mempool.space (confirmed balance).
- * - BTC xpub/ypub/zpub: addresses derived here (BIP32 public derivation, receive and
+ * - Mapped BTC xpub/ypub/zpub: confirmed balance and history from BTCPay/NBXplorer.
+ * - Legacy BTC address: mempool.space (confirmed balance).
+ * - Legacy BTC xpub/ypub/zpub: addresses derived here (BIP32 public derivation, receive and
  *   change chains, gap limit 20), each looked up on mempool.space. An extended public
  *   key can only derive addresses, never spend.
  * - ETH and ERC-20: a public JSON-RPC node (eth_getBalance, balanceOf).
@@ -17,12 +18,15 @@ import { bech32, createBase58check } from "@scure/base";
 import { sha256 } from "@noble/hashes/sha2.js";
 import { ripemd160 } from "@noble/hashes/legacy.js";
 import { nodeConfigured, nodeReady, scanSats } from "./bitcoind.js";
+import { btcpayMovements, btcpaySats, isCalendarDate } from "./btcpay.js";
 
 export type Chain = "btc" | "eth" | "sol";
 
 export interface WalletSpec {
   chain: Chain;
   address: string;
+  /** Already provisioned BTCPay/NBXplorer wallet; history before this date is unverified. */
+  btcpay?: { store_id: string; history_since: string };
   /** ERC-20 on eth: contract address, decimals, and its CoinGecko id for pricing. */
   token?: { contract: string; decimals: number; coingecko: string; symbol?: string };
 }
@@ -157,13 +161,33 @@ export function isExtendedKey(address: string): boolean {
   return /^[xyz]pub[1-9A-HJ-NP-Za-km-z]{100,}$/.test(address);
 }
 
+/** Validate the public identity and coverage of an explicitly indexed BTC wallet. */
+export function validateBtcpayWallet(w: WalletSpec): void {
+  if (w.btcpay === undefined) return;
+  if (w.chain !== "btc" || !w.btcpay || typeof w.btcpay.store_id !== "string" || !w.btcpay.store_id.trim() ||
+      !isCalendarDate(w.btcpay.history_since)) {
+    throw new Error("BTCPay wallets require chain btc, a non-empty store_id, and a real history_since YYYY-MM-DD date");
+  }
+  try {
+    if (!isExtendedKey(w.address)) throw new Error();
+    const key = HDKey.fromExtendedKey(w.address, VERSIONS[w.address[0] as "x" | "y" | "z"]);
+    if (!key.publicKey || key.privateKey) throw new Error();
+  } catch {
+    throw new Error("BTCPay wallet identity must be a valid xpub, ypub, or zpub, not a standalone address");
+  }
+}
+
 /**
  * Native or token amount held, in whole units, and where it was read.
- * BTC: our own bitcoind when BITCOIN_RPC_* is set and the node is synced, else the public
- * explorers. ETH: ETH_RPC_URL (our Helios light client) when set, else a public node.
+ * Mapped BTC wallets use BTCPay/NBXplorer exclusively and fail closed.
+ * Unmapped BTC: our own bitcoind when BITCOIN_RPC_* is set and the node is synced,
+ * else the public explorers. ETH: ETH_RPC_URL (our Helios light client) when set,
+ * else a public node.
  */
 export async function walletAmount(w: WalletSpec, fetchImpl: Fetch = fetch, env = process.env): Promise<{ amount: number; via: string }> {
+  validateBtcpayWallet(w);
   if (w.chain === "btc") {
+    if (w.btcpay) return { amount: (await btcpaySats(w.btcpay.store_id, fetchImpl, env)) / 1e8, via: "our BTCPay/NBXplorer (our bitcoind)" };
     if (nodeConfigured(env)) {
       // A node that is syncing, or paused by its sync window (no answer at all), falls back.
       const ready = await nodeReady(env, fetchImpl).then((r) => (r ? "ready" : "syncing"), () => "unreachable");
@@ -305,12 +329,16 @@ export async function priceOn(coingeckoId: string, date: string, fetchImpl: Fetc
 }
 
 /** Movements of every wallet since a date, valued at that day's price. ETH and SOL history needs an indexer we do not have: skipped, and said. */
-export async function walletMovements(wallets: WalletSpec[], since: string, fetchImpl: Fetch = fetch): Promise<{ movements: Movement[]; unsupported: string[] }> {
+export async function walletMovements(wallets: WalletSpec[], since: string, fetchImpl: Fetch = fetch, env = process.env): Promise<{ movements: Movement[]; unsupported: string[] }> {
   const movements: Movement[] = [];
   const unsupported: string[] = [];
   for (const w of wallets) {
+    validateBtcpayWallet(w);
     if (w.chain !== "btc") { unsupported.push(`${w.chain} ${w.address.slice(0, 6)}…${w.address.slice(-4)}`); continue; }
-    for (const m of await btcMovements(w.address, since, fetchImpl)) {
+    const history = w.btcpay
+      ? await btcpayMovements(w.btcpay.store_id, since, w.btcpay.history_since, fetchImpl, env)
+      : await btcMovements(w.address, since, fetchImpl);
+    for (const m of history) {
       const price = await priceOn("bitcoin", m.date, fetchImpl);
       const amount = m.sats / 1e8;
       movements.push({ date: m.date, txid: m.txid, chain: "btc", symbol: "BTC", amount, price, usd: Math.round(amount * price * 100) / 100 });

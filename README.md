@@ -29,7 +29,8 @@ at `http://<host>:8000/mcp` (also at `/`), with a health check at `/health`, and
 | `PORT` | `8000` | HTTP port |
 | `AMAZON_ORDERS_URL`, `AMAZON_ORDERS_TOKEN` | (unset) | An amazon-orders service (see the homelab repo); enables `amazon_order` and `amazon_receipts` |
 | `RECONCILE_MAP` | (unset) | Where each tracking account's real balance comes from; enables `get_tracking_balances`. See [Tracking balances](#tracking-balances) |
-| `BITCOIN_RPC_URL`, `BITCOIN_RPC_USER`, `BITCOIN_RPC_PASSWORD`, `ETH_RPC_URL` | (unset) | Your own bitcoind and Ethereum RPC for crypto balances, instead of public services |
+| `BTCPAY_URL`, `BTCPAY_API_KEY` | (unset) | BTCPay Greenfield API for fast, indexed watch-only BTC balances and tracked history; see [Tracking balances](#tracking-balances) |
+| `BITCOIN_RPC_URL`, `BITCOIN_RPC_USER`, `BITCOIN_RPC_PASSWORD`, `ETH_RPC_URL` | (unset) | Your own bitcoind (BTC block dates; legacy UTXO scans without BTCPay) and Ethereum RPC |
 | `PLAID_CLIENT_ID`, `PLAID_SECRET`, `PLAID_TOKENS`, `PLAID_ENV` | (unset), `production` | Read-only Plaid access for investment accounts in `RECONCILE_MAP` |
 | `YNAB_MCP_AI_FLAG` | (unset: off) | A flag color (`purple`, ...) put on every transaction this server creates or edits; see "AI flag" |
 | `YNAB_MCP_STATE_DIR` | `./state` (`/data` in the image) | Where enrich_transactions remembers item categories; mount a volume |
@@ -124,7 +125,7 @@ which reconciles the account the way YNAB's own reconcile does.
 [
   {"account": "Roth", "plaid": {"link": "vanguard", "masks": ["1234"]}},
   {"account": "Crypto", "wallets": [
-    {"chain": "btc", "address": "zpub..."},
+    {"chain": "btc", "address": "zpub...", "btcpay": {"store_id": "tracking-store", "history_since": "2026-11-03"}},
     {"chain": "eth", "address": "0x..."},
     {"chain": "eth", "address": "0x...", "token": {"contract": "0xA0b8...", "decimals": 6, "coingecko": "usd-coin", "symbol": "USDC"}},
     {"chain": "sol", "address": "..."}
@@ -132,16 +133,50 @@ which reconciles the account the way YNAB's own reconcile does.
 ]
 ```
 
-**Crypto** reads public data only, preferring your own nodes:
+**Crypto** uses public wallet information only; no seed or private key is needed:
 
-- BTC: with `BITCOIN_RPC_URL`, `BITCOIN_RPC_USER` and `BITCOIN_RPC_PASSWORD`, your own
-  bitcoind's `scantxoutset` over its UTXO set (works pruned; an x/y/z pub becomes receive
-  and change descriptors, range 0-999). Whitelist that user to `getblockchaininfo` and
-  `scantxoutset` only (`rpcwhitelist`); the client refuses any other method too. Until the
-  node is synced, and without one, addresses (an x/y/z pub's derived locally, gap limit 20)
-  are looked up on mempool.space and blockstream.info.
+- **Indexed BTC (recommended):** a wallet's `btcpay` mapping reads its confirmed balance
+  from BTCPay's existing NBXplorer/Bitcoin Core index. Set `BTCPAY_URL` and a
+  `BTCPAY_API_KEY` scoped to `btcpay.store.canviewwallet` for that store. Normal reads
+  never register a wallet, generate an address, scan the UTXO set, or contact explorers.
+  Unavailable, unsynchronized, unauthorized, or malformed results are errors, not zero
+  balances or permission to fall back to another source.
+- **Legacy BTC:** omit `btcpay` to keep the existing direct-node/public-explorer behavior.
+  With `BITCOIN_RPC_URL`, `BITCOIN_RPC_USER` and `BITCOIN_RPC_PASSWORD`, a synced node
+  runs `scantxoutset` (receive/change descriptors, range 0-999). This can take minutes on
+  every read; it is not a wallet index. Without a ready node, public explorers are used
+  (extended-key derivation is local, gap limit 20). The legacy balance RPC user needs
+  `getblockchaininfo,scantxoutset`.
 - ETH and ERC-20: `ETH_RPC_URL` (for example a Helios light client), else a public node.
 - SOL: Solana's public RPC. Prices: CoinGecko.
+
+#### Set up an indexed BTC wallet
+
+1. In BTCPay, connect the existing public account key to a dedicated **watch-only** store
+   wallet. Verify its network, script type, and receive/change addresses against the
+   originating wallet. Never replace a donation wallet with a personal tracking account.
+2. For an existing wallet, use BTCPay's native wallet **Rescan** once and wait for completion.
+   This discovers current coins through NBXplorer and works with a pruned Core node. Verify
+   the balance and discovery range; a completed scan does not prove complete old history.
+3. Set `history_since` to the first complete UTC day after initialization. Indexed history
+   is supported from that date; earlier requests fail explicitly. A UTXO scan cannot recover
+   every already-spent transaction. Review an opening reconciliation separately rather than
+   treating missing history as zero or automatically booking it as market return.
+4. Issue a store-scoped `btcpay.store.canviewwallet` key, without wallet-management,
+   transaction-creation, signing, broadcast, or administrative permissions. Store the key in
+   environment/secrets, never in `RECONCILE_MAP`. The API permission also permits a
+   receive-address endpoint that can generate an address; this adapter never calls it.
+   The upstream permission is therefore not literally mutation-free, even though all
+   adapter requests are reads and the watch-only wallet cannot sign.
+5. For movement dates, configure Bitcoin RPC with a user restricted to
+   `getblockchaininfo,getblockheader`. BTCPay's first-seen timestamps are not confirmation
+   dates; the adapter uses Core's block timestamps to preserve date-based valuation. It
+   reads native net wallet movements, not individual-address scans. On BTCPay 2.4.6,
+   confirmed-only filtered pagination avoids the unfiltered transaction-list skip bug.
+
+Restore NBXplorer's database with BTCPay's state: future tracked history is not necessarily
+reconstructible from a pruned node. ETH/SOL history remains unsupported. Generic legacy BTC
+history still uses public explorers.
 
 Each wallet line in `get_tracking_balances` says where it was read. Nothing here can sign or move funds.
 

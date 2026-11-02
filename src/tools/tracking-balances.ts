@@ -37,7 +37,7 @@ type Deps = {
 
 /**
  * Read every mapped source and compare with YNAB. One YNAB request, one Plaid
- * request per link, and the public crypto lookups. A failing source fails only
+ * request per link, and read-only crypto lookups. A failing source fails only
  * its own accounts.
  */
 export async function trackingBalances(
@@ -120,7 +120,7 @@ export function registerTrackingBalanceTools(server: McpServer) {
     title: "Get Tracking Account Balances",
     description:
       "[1 API call] Read-only. For each tracking account configured in RECONCILE_MAP, reads its real balance " +
-      "(investment accounts through read-only Plaid; crypto from public wallet addresses and public prices) and " +
+      "(investment accounts through read-only Plaid; crypto from mapped BTCPay wallets or public addresses, with public prices) and " +
       "compares it with YNAB's cleared balance. Returns the difference a reconciliation would book; to book it, " +
       "call audit_account_reconciliation with target_balance. Changes nothing.",
     inputSchema: z.object({
@@ -128,7 +128,9 @@ export function registerTrackingBalanceTools(server: McpServer) {
       history: z.record(z.string(), z.string().regex(/^\d{4}-\d{2}-\d{2}$/)).optional().describe(
         "For wallet accounts: YNAB account id -> YYYY-MM-DD. Also returns the on-chain movements (BTC) since " +
         "that date, each valued at that day's price, so sends and receives can be booked on their own dates. " +
-        "Uses public explorers; ask only when a wallet's amount changed."
+        "Mapped BTC wallets use our indexed BTCPay/NBXplorer history and our bitcoind block dates, only from their " +
+        "configured history_since coverage date; earlier requests fail for review. Unmapped BTC wallets use legacy " +
+        "public explorers. Ask only when a wallet's amount changed."
       ),
     }),
     annotations: { readOnlyHint: true },

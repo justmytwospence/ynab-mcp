@@ -1,4 +1,5 @@
-import type { WalletSpec } from "./crypto.js";
+import { validateBtcpayWallet, type WalletSpec } from "./crypto.js";
+import { btcpayConfig } from "./btcpay.js";
 
 /**
  * RECONCILE_MAP: a JSON array saying where each YNAB tracking account's real
@@ -36,6 +37,10 @@ export function reconcileMap(env = process.env): SourceSpec[] {
       for (const w of s.wallets) {
         if (!["btc", "eth", "sol"].includes(w?.chain) || typeof w.address !== "string") {
           throw new Error(`RECONCILE_MAP[${i}] (${s.account}): each wallet needs chain btc|eth|sol and an address`);
+        }
+        if (w.btcpay !== undefined) {
+          validateBtcpayWallet(w);
+          btcpayConfig(env);
         }
         if (w.token && (w.chain !== "eth" || typeof w.token.contract !== "string" || typeof w.token.decimals !== "number" || typeof w.token.coingecko !== "string")) {
           throw new Error(`RECONCILE_MAP[${i}] (${s.account}): a token needs chain eth, contract, decimals and coingecko`);

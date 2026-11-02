@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { plaidRead, plaidLink, investmentBalances, READ_PATHS, PlaidError } from "./plaid.js";
-import { walletAmount, walletBalances, unitsToNumber, isExtendedKey } from "./crypto.js";
+import { walletAmount, walletBalances, walletMovements, unitsToNumber, isExtendedKey } from "./crypto.js";
 import { reconcileMap } from "./config.js";
 import { trackingBalances } from "../tools/tracking-balances.js";
 
@@ -165,7 +165,7 @@ test("trackingBalances: sums masks, isolates failures, computes the adjustment",
 
 test("bitcoind: allowlist, descriptors, ready and syncing paths", async () => {
   const { rpc, descriptors, METHODS } = await import("./bitcoind.js");
-  assert.deepEqual([...METHODS], ["getblockchaininfo", "scantxoutset"]);
+  assert.deepEqual([...METHODS], ["getblockchaininfo", "scantxoutset", "getblockheader"]);
   const benv = { BITCOIN_RPC_URL: "http://bitcoind:8332", BITCOIN_RPC_USER: "ynab", BITCOIN_RPC_PASSWORD: "pw" } as NodeJS.ProcessEnv;
   for (const m of ["getbalance", "listwallets", "stop", "sendtoaddress", "dumpprivkey"]) {
     await assert.rejects(() => rpc(m as any, [], benv, (async () => { throw new Error("no call"); }) as any), /not allowed/);
@@ -219,6 +219,237 @@ test("ETH_RPC_URL replaces the public node", async () => {
   assert.equal(r[0]!.via, "our Helios light client");
   assert.ok(calls.some((c) => c.url === "http://helios:8545"));
   assert.ok(!calls.some((c) => c.url.includes("publicnode")));
+});
+
+const btcpayEnv = {
+  BTCPAY_URL: "http://btcpay:23000",
+  BTCPAY_API_KEY: "test-read-only-key",
+  BITCOIN_RPC_URL: "http://bitcoind:8332",
+  BITCOIN_RPC_USER: "ynab",
+  BITCOIN_RPC_PASSWORD: "pw",
+} as NodeJS.ProcessEnv;
+const btcpayWallet = {
+  chain: "btc" as const,
+  address: ZPUB,
+  btcpay: { store_id: "store/with space", history_since: "2026-08-07" },
+};
+const btcpayWalletPath = `/api/v1/stores/${encodeURIComponent(btcpayWallet.btcpay.store_id)}/payment-methods/BTC-CHAIN/wallet`;
+const syncedBTCPay = {
+  syncStatus: [{
+    paymentMethodId: "BTC-CHAIN", available: true, syncHeight: 900000, chainHeight: 900000,
+    nodeInformation: { blocks: 900000, headers: 900000, verificationProgress: 1 },
+  }],
+};
+const btcHistoryCoverageError = "BTC history is only verified from 2026-08-07; review earlier movements before reconciling";
+const blockHash = "ab".repeat(32);
+const blockTime = Date.parse("2026-09-10T12:00:00Z") / 1000;
+function confirmedBTCPayTx(transactionHash = "cd".repeat(32), amount = "-0.30001000") {
+  return {
+    transactionHash, amount, blockHash, confirmations: 6, status: "Confirmed", blockHeight: 899995,
+    // BTCPay first saw this transaction on a different day: only the block header dates it.
+    timestamp: "2026-09-09T23:59:00Z",
+  };
+}
+
+type BTCPayCall = { url: string; method: string; body: any; headers: Headers };
+function btcpayFetch(override?: (call: BTCPayCall) => { status?: number; body: unknown } | undefined) {
+  const calls: BTCPayCall[] = [];
+  const f = (async (input: string | URL | Request, init?: RequestInit) => {
+    const call = {
+      url: String(input), method: init?.method ?? "GET",
+      body: init?.body ? JSON.parse(String(init.body)) : undefined,
+      headers: new Headers(init?.headers),
+    };
+    calls.push(call);
+    let response = override?.(call);
+    if (!response) {
+      if (call.url === `${btcpayEnv.BTCPAY_URL}/api/v1/server/info`) response = { body: syncedBTCPay };
+      else if (call.url === `${btcpayEnv.BTCPAY_URL}${btcpayWalletPath}`) response = { body: { confirmedBalance: "0.25000001" } };
+      else if (call.url === `${btcpayEnv.BTCPAY_URL}${btcpayWalletPath}/transactions?statusFilter=Confirmed&skip=0&limit=100`) response = { body: [confirmedBTCPayTx()] };
+      else if (call.url === btcpayEnv.BITCOIN_RPC_URL && call.body?.method === "getblockheader") {
+        response = { body: { result: { hash: blockHash, confirmations: 6, time: blockTime }, error: null } };
+      } else if (call.url === "https://api.coingecko.com/api/v3/simple/price?ids=bitcoin&vs_currencies=usd") response = { body: { bitcoin: { usd: 100000 } } };
+      else if (call.url === "https://api.coingecko.com/api/v3/coins/bitcoin/history?date=10-09-2026&localization=false") response = { body: { market_data: { current_price: { usd: 60000 } } } };
+    }
+    assert.ok(response, `unexpected request: ${call.method} ${call.url} ${JSON.stringify(call.body)}`);
+    return new Response(JSON.stringify(response.body), { status: response.status ?? 200 });
+  }) as typeof fetch;
+  return { f, calls };
+}
+
+// Check recorded calls even on rejected operations: a caught fetch error must not hide a fallback.
+function assertBTCPayReadOnly(calls: BTCPayCall[]) {
+  for (const call of calls) {
+    if (call.url.startsWith(`${btcpayEnv.BTCPAY_URL}/`)) {
+      assert.equal(call.method, "GET");
+      assert.equal(call.body, undefined);
+      assert.equal(call.headers.get("Authorization"), `token ${btcpayEnv.BTCPAY_API_KEY}`);
+      const url = new URL(call.url);
+      assert.ok(["/api/v1/server/info", btcpayWalletPath, `${btcpayWalletPath}/transactions`].includes(url.pathname), call.url);
+      if (url.pathname.endsWith("/transactions")) {
+        assert.match(url.search, /^\?statusFilter=Confirmed&skip=\d+&limit=100$/);
+        assert.equal(Number(url.searchParams.get("skip")) % 100, 0);
+      } else assert.equal(url.search, "");
+    } else if (call.url === btcpayEnv.BITCOIN_RPC_URL) {
+      assert.equal(call.method, "POST");
+      assert.equal(call.body.method, "getblockheader");
+    } else {
+      assert.equal(call.method, "GET");
+      assert.equal(call.body, undefined);
+      const url = new URL(call.url);
+      assert.equal(url.origin, "https://api.coingecko.com");
+      assert.ok(["/api/v3/simple/price", "/api/v3/coins/bitcoin/history"].includes(url.pathname), call.url);
+    }
+  }
+}
+
+test("config: BTCPay accepts only BTC extended public identities and real coverage dates", async () => {
+  const parse = (wallet: unknown, overrides: NodeJS.ProcessEnv = {}) => reconcileMap({
+    ...btcpayEnv, ...overrides, RECONCILE_MAP: JSON.stringify([{ account: "BTC", wallets: [wallet] }]),
+  });
+  const { HDKey } = await import("@scure/bip32");
+  const node = HDKey.fromExtendedKey(ZPUB, { public: 0x04b24746, private: 0x04b2430c });
+  for (const versions of [
+    { public: 0x0488b21e, private: 0x0488ade4 },
+    { public: 0x049d7cb2, private: 0x049d7878 },
+    { public: 0x04b24746, private: 0x04b2430c },
+  ]) {
+    const address = new HDKey({ publicKey: node.publicKey!, chainCode: node.chainCode!, versions }).publicExtendedKey;
+    const wallet = { ...btcpayWallet, address };
+    assert.deepEqual(parse(wallet)[0]!.wallets, [wallet]);
+  }
+  for (const history_since of ["2024-02-29", "2026-08-07"]) {
+    assert.equal(parse({ ...btcpayWallet, btcpay: { ...btcpayWallet.btcpay, history_since } }).length, 1);
+  }
+  const invalid = [
+    { ...btcpayWallet, chain: "eth" },
+    { ...btcpayWallet, chain: "sol" },
+    { ...btcpayWallet, address: firstZ },
+    { ...btcpayWallet, address: "zpub" + "A".repeat(107) },
+    { ...btcpayWallet, address: ZPUB.slice(0, -1) + "1" },
+    { ...btcpayWallet, btcpay: null },
+    { ...btcpayWallet, btcpay: {} },
+    ...["", "   ", 42].map((store_id) => ({ ...btcpayWallet, btcpay: { ...btcpayWallet.btcpay, store_id } })),
+    ...[undefined, "", "2026-8-07", "2026-02-29", "2026-04-31", "2026-13-01", "2026-00-10", "2026-08-00", "2026-08-07T00:00:00Z"].map((history_since) => ({
+      ...btcpayWallet, btcpay: { ...btcpayWallet.btcpay, history_since },
+    })),
+  ];
+  for (const wallet of invalid) assert.throws(() => parse(wallet), JSON.stringify(wallet));
+  for (const BTCPAY_URL of [undefined, "", "btcpay:23000", "ftp://btcpay", "http://", "https://user:secret@btcpay", "http://user@btcpay"]) {
+    assert.throws(() => parse(btcpayWallet, { BTCPAY_URL }), String(BTCPAY_URL));
+  }
+  for (const BTCPAY_API_KEY of [undefined, "", "   "]) assert.throws(() => parse(btcpayWallet, { BTCPAY_API_KEY }));
+  assert.equal(parse(btcpayWallet, { BTCPAY_URL: "https://btcpay.example" }).length, 1);
+});
+
+test("walletAmount: BTCPay wins over configured bitcoind and never scans or registers a wallet", async () => {
+  const { f, calls } = btcpayFetch();
+  assert.deepEqual(await walletAmount(btcpayWallet, f, btcpayEnv), {
+    amount: 0.25000001, via: "our BTCPay/NBXplorer (our bitcoind)",
+  });
+  assertBTCPayReadOnly(calls);
+  assert.deepEqual(calls.map((c) => c.url).sort(), [
+    `${btcpayEnv.BTCPAY_URL}/api/v1/server/info`, `${btcpayEnv.BTCPAY_URL}${btcpayWalletPath}`,
+  ].sort());
+});
+
+test("walletAmount: BTCPay errors fail closed without bitcoind scans or public fallback", async (t) => {
+  for (const failure of ["offline", "unauthorized", "syncing", "unavailable", "balance error"] as const) {
+    await t.test(failure, async () => {
+      const { f, calls } = btcpayFetch((call) => {
+        if (call.url === `${btcpayEnv.BTCPAY_URL}/api/v1/server/info`) {
+          if (failure === "offline") throw new TypeError("BTCPay unavailable");
+          if (failure === "unauthorized") return { status: 401, body: {} };
+          if (failure === "syncing") return { body: { syncStatus: [{ ...syncedBTCPay.syncStatus[0], syncHeight: 899000 }] } };
+          if (failure === "unavailable") return { body: { syncStatus: [{ ...syncedBTCPay.syncStatus[0], available: false }] } };
+        }
+        if (failure === "balance error" && call.url === `${btcpayEnv.BTCPAY_URL}${btcpayWalletPath}`) return { status: 503, body: {} };
+      });
+      await assert.rejects(() => walletAmount(btcpayWallet, f, btcpayEnv));
+      assert.ok(calls.length > 0);
+      assertBTCPayReadOnly(calls);
+      assert.ok(calls.every((c) => c.url.startsWith(`${btcpayEnv.BTCPAY_URL}/`)));
+    });
+  }
+});
+
+test("walletMovements: BTCPay uses block-header dates and keeps historical USD Movement values", async () => {
+  const incoming = confirmedBTCPayTx("ef".repeat(32), "0.50000000");
+  const { f, calls } = btcpayFetch((call) => call.url.endsWith("/transactions?statusFilter=Confirmed&skip=0&limit=100")
+    ? { body: [incoming, confirmedBTCPayTx()] } : undefined);
+  const result = await walletMovements([btcpayWallet], "2026-09-10", f, btcpayEnv);
+  assert.deepEqual(result.unsupported, []);
+  assert.deepEqual(result.movements.slice().sort((a, b) => a.txid.localeCompare(b.txid)), [
+    { date: "2026-09-10", txid: "cd".repeat(32), chain: "btc", symbol: "BTC", amount: -0.30001, price: 60000, usd: -18000.6 },
+    { date: "2026-09-10", txid: "ef".repeat(32), chain: "btc", symbol: "BTC", amount: 0.5, price: 60000, usd: 30000 },
+  ]);
+  assertBTCPayReadOnly(calls);
+  assert.ok(calls.some((c) => c.url.endsWith("/api/v1/server/info")));
+  assert.ok(calls.some((c) => c.url.endsWith("/transactions?statusFilter=Confirmed&skip=0&limit=100")));
+  const headers = calls.filter((c) => c.body?.method === "getblockheader");
+  assert.ok(headers.length > 0);
+  assert.ok(headers.every((c) => c.body.params[0] === blockHash));
+  assert.ok(calls.some((c) => c.url.endsWith("/coins/bitcoin/history?date=10-09-2026&localization=false")));
+});
+
+test("walletMovements: BTCPay paginates confirmed history with fixed read-only query parameters", async () => {
+  const page = Array.from({ length: 100 }, (_, i) => confirmedBTCPayTx((i + 1).toString(16).padStart(64, "0"), "0.00000001"));
+  const { f, calls } = btcpayFetch((call) => {
+    if (call.url.endsWith("/transactions?statusFilter=Confirmed&skip=0&limit=100")) return { body: page };
+    if (call.url.endsWith("/transactions?statusFilter=Confirmed&skip=100&limit=100")) return { body: [] };
+  });
+  const result = await walletMovements([btcpayWallet], "2026-08-07", f, btcpayEnv);
+  assert.equal(result.movements.length, 100);
+  assert.equal(new Set(result.movements.map((m) => m.txid)).size, 100);
+  assert.ok(result.movements.every((m) => m.amount === 0.00000001 && m.date === "2026-09-10"));
+  assertBTCPayReadOnly(calls);
+  assert.deepEqual(calls.filter((c) => c.url.includes("/transactions?")).map((c) => c.url), [
+    `${btcpayEnv.BTCPAY_URL}${btcpayWalletPath}/transactions?statusFilter=Confirmed&skip=0&limit=100`,
+    `${btcpayEnv.BTCPAY_URL}${btcpayWalletPath}/transactions?statusFilter=Confirmed&skip=100&limit=100`,
+  ]);
+});
+
+test("walletMovements: uncovered BTCPay history refuses before any HTTP", async () => {
+  const { f, calls } = btcpayFetch();
+  await assert.rejects(() => walletMovements([btcpayWallet], "2026-08-06", f, btcpayEnv), { message: btcHistoryCoverageError });
+  assert.deepEqual(calls, []);
+});
+
+test("walletMovements: BTCPay history failure never falls back to Esplora or returns empty history", async () => {
+  const { f, calls } = btcpayFetch((call) => call.url.includes("/transactions?") ? { status: 503, body: {} } : undefined);
+  await assert.rejects(() => walletMovements([btcpayWallet], "2026-08-07", f, btcpayEnv));
+  assertBTCPayReadOnly(calls);
+  assert.ok(calls.some((c) => c.url.includes("/transactions?")));
+  assert.ok(calls.every((c) => c.url.startsWith(`${btcpayEnv.BTCPAY_URL}/`)));
+});
+
+test("trackingBalances: BTCPay coverage refusal is an account error, not a balance or empty movements", async () => {
+  const { f, calls } = btcpayFetch();
+  let historyCalls = 0;
+  const rows = await trackingBalances(
+    [{ account: "BTC", wallets: [btcpayWallet] }],
+    [{ id: "btc-account", name: "BTC", cleared_balance: 10_000, uncleared_balance: 0, deleted: false, closed: false }],
+    {},
+    {
+      fetchWallets: (wallets) => walletBalances(wallets, f, btcpayEnv),
+      fetchMovements: (wallets, since) => {
+        historyCalls++;
+        assert.equal(since, "2026-08-06");
+        return walletMovements(wallets, since, f, btcpayEnv);
+      },
+    },
+    { "btc-account": "2026-08-06" },
+  );
+  assert.equal(historyCalls, 1);
+  assert.equal(rows.length, 1);
+  assert.equal(rows[0]!.error, btcHistoryCoverageError);
+  assert.equal(rows[0]!.sourceBalance, null);
+  assert.equal(rows[0]!.difference, null);
+  assert.equal(rows[0]!.movements, undefined);
+  assert.equal(rows[0]!.wallets![0]!.via, "our BTCPay/NBXplorer (our bitcoind)");
+  assertBTCPayReadOnly(calls);
+  assert.ok(calls.some((c) => c.url.includes("/simple/price?")));
+  assert.ok(!calls.some((c) => c.url.includes("/transactions?") || c.url === btcpayEnv.BITCOIN_RPC_URL));
 });
 
 test("btcMovements: nets a transaction across the wallet's addresses, since a date", async () => {

@@ -9,5 +9,11 @@ services:
       # Hostnames clients use to reach the server, e.g. behind a reverse proxy.
       # Requests naming any other Host are refused (DNS-rebinding protection).
       MCP_ALLOWED_HOSTS: ${MCP_ALLOWED_HOSTS:-}
+      RECONCILE_MAP: ${RECONCILE_MAP:-}
+      BTCPAY_URL: ${BTCPAY_URL:-}
+      BTCPAY_API_KEY: ${BTCPAY_API_KEY:-}
+      BITCOIN_RPC_URL: ${BITCOIN_RPC_URL:-}
+      BITCOIN_RPC_USER: ${BITCOIN_RPC_USER:-}
+      BITCOIN_RPC_PASSWORD: ${BITCOIN_RPC_PASSWORD:-}
     ports:
       - "8000:8000"

@@ -1,6 +1,7 @@
 /**
  * Bitcoin balances from our own node: bitcoind's `scantxoutset` over its UTXO set. Works
- * on a pruned node, needs no wallet, and sends nothing outside.
+ * on a pruned node, needs no wallet, and sends nothing outside. `getblockheader`
+ * also supplies confirmed block dates for BTCPay's indexed transaction history.
  *
  * The RPC user is meant to be whitelisted to exactly METHODS in bitcoin.conf
  * (rpcwhitelist); this client refuses anything else on its side too.
@@ -8,7 +9,7 @@
 import { createBase58check } from "@scure/base";
 import { sha256 } from "@noble/hashes/sha2.js";
 
-export const METHODS = ["getblockchaininfo", "scantxoutset"] as const;
+export const METHODS = ["getblockchaininfo", "scantxoutset", "getblockheader"] as const;
 type Method = (typeof METHODS)[number];
 type Fetch = typeof fetch;
 

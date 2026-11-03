@@ -227,7 +227,7 @@ test("offline MCP wire declarations, resources, prompts and results", async t =>
     assert.equal(summary.structuredContent.data.counts.transactions, 150);
     assert.equal(summary.structuredContent.data.transactions, undefined); // Summary, honestly described.
     assert.equal(summary.structuredContent.request_cost.attempts, 1);
-    const plan = await request("tools/call", { name: "plan_month", arguments: { budget_id: "budget", month: "2026-01-01", format: "json" } });
+    const plan = await request("tools/call", { name: "plan_month", arguments: { budget_id: "budget", month: "2026-01-01", rules: [{ kind: "spent", group: "Daily" }], format: "json" } });
     assert.ok(resultSchema.safeParse(plan.structuredContent).success);
     const body = JSON.parse(plan.content[0].text);
     assert.equal(body.applied, null);

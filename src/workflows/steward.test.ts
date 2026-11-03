@@ -264,7 +264,10 @@ test("an amount match beats the payee's majority category", () => {
   assert.equal(s[0]!.changes, true);
 });
 
-test("plan_month: variable costs get last month's spending, fixed goals get funded", () => {
+const FIXED = { kind: "goal", group: "Fixed Costs" } as const;
+const VARIABLE = { kind: "spent", group: "Variable Costs" } as const;
+
+test("plan_month: rules in order; goals funded, spending copied", () => {
   const snap = snapshot({
     cells: {
       groceries: { "2026-02-01": { activity: -400_000, balance: 0 }, "2026-03-01": { budgeted: 300_000, balance: 300_000 } },
@@ -279,13 +282,99 @@ test("plan_month: variable costs get last month's spending, fixed goals get fund
     ],
   });
   const model = new BudgetModel(snap, TODAY);
-  const plan = planMonth(model, "2026-03-01");
+  const plan = planMonth(model, "2026-03-01", [FIXED, VARIABLE]);
   assert.deepEqual(
     plan.lines.map((l) => [l.categoryId, l.target]),
     [["rent", 3_000_000], ["groceries", 400_000]]
   );
   assert.deepEqual(plan.flags.map((f) => [f.categoryId, f.issue]), [["gym", "no_goal"]]);
+  assert.match(plan.flags[0]!.detail, /\$40\.00/);
   assert.equal(plan.affordable, true);
+});
+
+test("plan_month spent: nothing spent falls back to the month before's assigned", () => {
+  const snap = snapshot({
+    cells: { groceries: { "2026-02-01": { budgeted: 250_000, activity: 0, balance: 250_000 }, "2026-03-01": { balance: 0 } } },
+    groups: { groceries: "Variable Costs" },
+    tbb: [0, 0, 5_000_000],
+    transactions: [],
+  });
+  const model = new BudgetModel(snap, TODAY);
+  const plan = planMonth(model, "2026-03-01", [{ ...VARIABLE, whenNothingSpent: "source_budgeted" }]);
+  assert.equal(plan.lines.length, 1);
+  assert.equal(plan.lines[0]!.target, 250_000);
+  assert.match(plan.lines[0]!.basis, /nothing spent in 2026-02/);
+  assert.equal(planMonth(model, "2026-03-01", [VARIABLE]).lines.length, 0);
+});
+
+test("plan_month spent: at_least_source_budgeted holds the month before's assigned until spending passes it", () => {
+  const build = (activity: number) => new BudgetModel(snapshot({
+    cells: { groceries: { "2026-02-01": { budgeted: 300_000, activity, balance: 300_000 + activity }, "2026-03-01": { balance: 0 } } },
+    groups: { groceries: "Variable Costs" },
+    tbb: [0, 0, 5_000_000],
+    transactions: [],
+  }), TODAY);
+  const rules = [{ ...VARIABLE, atLeastSourceBudgeted: true }];
+  const held = planMonth(build(-120_000), "2026-03-01", rules);
+  assert.equal(held.lines[0]!.target, 300_000);
+  assert.match(held.lines[0]!.basis, /2026-02's assigned/);
+  const passed = planMonth(build(-350_000), "2026-03-01", rules);
+  assert.equal(passed.lines[0]!.target, 350_000);
+  assert.equal(passed.lines[0]!.basis, "spent in 2026-02");
+});
+
+test("plan_month in_order funding pays rules in order and part-funds where Ready to Assign runs out", () => {
+  const snap = snapshot({
+    cells: {
+      rent: { "2026-03-01": { budgeted: 0, balance: 0, goal: { goal_type: "NEED", goal_target: 80_000, goal_under_funded: 80_000, goal_cadence: 1, goal_creation_month: "2026-03-01" } } },
+      groceries: { "2026-02-01": { activity: -50_000, balance: 0 } },
+    },
+    groups: { rent: "Fixed Costs", groceries: "Variable Costs" },
+    tbb: [0, 0, 100_000],
+    transactions: [],
+  });
+  const model = new BudgetModel(snap, TODAY);
+  const plan = planMonth(model, "2026-03-01", [FIXED, VARIABLE], { funding: "in_order" });
+  assert.deepEqual(plan.lines.map((l) => [l.categoryId, l.funded]), [["rent", 80_000], ["groceries", 20_000]]);
+  assert.equal(plan.shortfall, 30_000);
+  assert.equal(plan.fundedIncrease, 100_000);
+  assert.equal(plan.affordable, false);
+  const all = planMonth(model, "2026-03-01", [FIXED, VARIABLE]);
+  assert.ok(all.lines.every((l) => l.funded === 0));
+  assert.equal(all.shortfall, 130_000);
+});
+
+test("plan_month in_order: decreases free money for later lines", () => {
+  const snap = snapshot({
+    cells: {
+      groceries: { "2026-02-01": { activity: -40_000, balance: 0 }, "2026-03-01": { budgeted: 100_000, balance: 100_000 } },
+      dining: { "2026-02-01": { activity: -50_000, balance: 0 }, "2026-03-01": { balance: 0 } },
+    },
+    groups: { groceries: "Variable Costs", dining: "Variable Costs" },
+    tbb: [0, 0, 0],
+    transactions: [],
+  });
+  const plan = planMonth(new BudgetModel(snap, TODAY), "2026-03-01", [VARIABLE], { funding: "in_order" });
+  const funded = Object.fromEntries(plan.lines.map((l) => [l.categoryId, l.funded]));
+  assert.equal(funded.dining, 50_000);
+  assert.equal(funded.groceries, -60_000);
+  assert.equal(plan.shortfall, 0);
+});
+
+test("plan_month validates rules; the first rule that selects a category wins", () => {
+  const snap = snapshot({
+    cells: { groceries: { "2026-02-01": { budgeted: 250_000, activity: 0, balance: 250_000 }, "2026-03-01": { balance: 0 } } },
+    groups: { groceries: "Variable Costs" },
+    tbb: [0, 0, 5_000_000],
+    transactions: [],
+  });
+  const model = new BudgetModel(snap, TODAY);
+  assert.throws(() => planMonth(model, "2026-03-01", [{ kind: "spent", group: "Nope" }]), /no category group named "Nope"/);
+  assert.throws(() => planMonth(model, "2026-03-01", [{ kind: "spent", group: "Variable Costs", categoryIds: ["groceries"] }]), /exactly one of group or category_ids/);
+  assert.throws(() => planMonth(model, "2026-03-01", [{ kind: "spent", categoryIds: ["missing"] }]), /unknown category missing/);
+  const plan = planMonth(model, "2026-03-01", [{ kind: "spent", categoryIds: ["groceries"], whenNothingSpent: "source_budgeted" }, VARIABLE]);
+  assert.equal(plan.lines[0]!.rule, 0);
+  assert.equal(plan.lines[0]!.target, 250_000);
 });
 
 import { ItemStore } from "./lib/item-store.js";

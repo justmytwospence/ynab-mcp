@@ -1,15 +1,15 @@
 import { z } from "zod";
 import { McpServer } from "@modelcontextprotocol/server";
-import { registerTool } from "../utils/register.js";
+import { registerTool, idSchema } from "../utils/register.js";
 import { getClient, transactionUpdateCost } from "../ynab-client.js";
 import { apiUsageTracker } from "../utils/api-usage.js";
 import { getBudgetSnapshot, invalidateBudgetSnapshot } from "../budget-snapshot.js";
 import { textResult, errorResult, jsonResult, formatCurrency } from "../utils/formatting.js";
 import { describeError } from "../utils/errors.js";
 import { HUMAN_DESC, asHuman } from "../utils/ai-flag.js";
-import { BudgetModel, addMonths } from "./lib/budget-model.js";
+import { BudgetModel, SUB_CENT, addMonths } from "./lib/budget-model.js";
 import { findIntegrityProblems, planRepairs, type Findings, type RepairPlan, type Repair } from "./lib/integrity.js";
-import { planMonth, type MonthPlan } from "./lib/month-plan.js";
+import { planMonth, type MonthPlan, type PlanRule } from "./lib/month-plan.js";
 import { suggestCategories, type Suggestion } from "./lib/categorize.js";
 import { planEnrichment, type EnrichPlan } from "./lib/enrich.js";
 import { ItemStore } from "./lib/item-store.js";
@@ -20,6 +20,35 @@ const today = z
   .string()
   .optional()
   .describe("Treat this date (YYYY-MM-DD) as today; months before its month are history. Default: today.");
+
+const ruleTarget = {
+  group: z.string().optional().describe("Category group name (exact match, surrounding spaces ignored)"),
+  category_ids: z.array(idSchema).optional().describe("Or these category ids; give exactly one of group or category_ids"),
+};
+const planRule = z.discriminatedUnion("kind", [
+  z.object({
+    kind: z.literal("spent"),
+    ...ruleTarget,
+    when_nothing_spent: z.enum(["zero", "source_budgeted"]).default("zero")
+      .describe("A category that spent nothing the month before gets 0, or that month's assigned amount"),
+    at_least_source_budgeted: z.boolean().default(false)
+      .describe("Never less than the month before's assigned amount (for planning while that month is still running)"),
+  }),
+  z.object({
+    kind: z.literal("goal"),
+    ...ruleTarget,
+    flags: z.boolean().default(true)
+      .describe("Report charges with no goal, goals whose charge stopped and monthly charges that differ from their goal"),
+  }),
+]);
+
+type PlanApplied = { writes: number; failed: string[]; skipped?: string };
+
+function toPlanRule(r: z.infer<typeof planRule>): PlanRule {
+  return r.kind === "spent"
+    ? { kind: "spent", group: r.group, categoryIds: r.category_ids, whenNothingSpent: r.when_nothing_spent, atLeastSourceBudgeted: r.at_least_source_budgeted }
+    : { kind: "goal", group: r.group, categoryIds: r.category_ids, flags: r.flags };
+}
 
 const money = (m: number) => formatCurrency(m);
 const month7 = (m: string) => m.substring(0, 7);
@@ -84,16 +113,20 @@ export function registerStewardTools(server: McpServer) {
   registerTool(server, "plan_month", {
     title: "Plan Month",
     description:
-      "[1 API call to plan, +1 per write] [Workflow] Budgets a month by the house rules: every Variable Costs " +
-      "category gets what it spent the month before (run after that month closes), every Fixed Costs goal is " +
-      "funded to its target (assigned + underfunded), other groups are untouched. Flags fixed costs charged with " +
-      "no goal, goals whose charge stopped, and monthly charges that no longer match their goal. apply=true writes " +
-      "the changed categories, only if Ready to Assign covers the increase.",
+      "[1 API call to plan, +1 per write] [Workflow] Sets a month's assigned amounts by rules you give, in order: " +
+      "a category takes the first rule that selects it (by group name or category ids); categories no rule selects " +
+      "are untouched. Rule kinds: 'spent' = what the category spent the month before (when_nothing_spent: 0 or that " +
+      "month's assigned; at_least_source_budgeted: never below that month's assigned, for planning while it is still " +
+      "running); 'goal' = assigned + underfunded for categories with an active goal, flagging charges with no goal, " +
+      "goals whose charge stopped, and monthly charges that differ from their goal. Only Ready to Assign pays for " +
+      "increases: funding 'all_or_nothing' writes the whole plan only if it fits; 'in_order' funds lines in rule order " +
+      "(decreases first) until Ready to Assign runs out, part-funding the line it runs out on. apply=true writes the " +
+      "changed categories.",
     inputSchema: z.object({
       budget_id: budgetId,
       month: z.string().describe("Month to plan (YYYY-MM-01), or 'current' / 'next'"),
-      variable_group: z.string().default("Variable Costs"),
-      fixed_group: z.string().default("Fixed Costs"),
+      rules: z.array(planRule).min(1).max(20).describe("Ordered rules; the order is also the funding priority"),
+      funding: z.enum(["all_or_nothing", "in_order"]).default("all_or_nothing"),
       apply: z.boolean().default(false),
       today,
       format,
@@ -107,29 +140,32 @@ export function registerStewardTools(server: McpServer) {
         args.month === "current" ? model.currentMonth
           : args.month === "next" ? nextMonth(model.currentMonth)
             : args.month;
-      const plan = planMonth(model, month, { variableGroup: args.variable_group, fixedGroup: args.fixed_group });
-      let applied: { writes: number; failed: string[]; skipped?: string } | null = null;
+      const plan = planMonth(model, month, args.rules.map(toPlanRule), { funding: args.funding });
+      let applied: PlanApplied | null = null;
       if (args.apply) {
-        if (!plan.affordable) {
+        if (plan.funding === "all_or_nothing" && !plan.affordable) {
           applied = { writes: 0, failed: [], skipped: "Ready to Assign does not cover the increase" };
         } else {
-          const outcome = { writes: 0, failed: [] as string[] };
+          const outcome: PlanApplied = { writes: 0, failed: [] };
           applied = outcome;
-          await apiUsageTracker.withBudget(plan.lines.length, async () => {
-            for (const line of plan.lines) {
-              try {
-                await getClient().categories.updateMonthCategory(snapshot.budgetId, month, line.categoryId, {
-                  category: { budgeted: line.target },
-                });
-                outcome.writes += 1;
-              } catch (e) {
-                outcome.writes += 1;
-                outcome.failed.push(`${line.label}: ${describeError(e)}. Outcome may be ambiguous; inspect before retrying.`);
-                break;
+          const toWrite = plan.lines.filter((l) => Math.abs(l.funded) >= SUB_CENT);
+          if (toWrite.length > 0) {
+            await apiUsageTracker.withBudget(toWrite.length, async () => {
+              for (const line of toWrite) {
+                try {
+                  await getClient().categories.updateMonthCategory(snapshot.budgetId, month, line.categoryId, {
+                    category: { budgeted: line.current + line.funded },
+                  });
+                  outcome.writes += 1;
+                } catch (e) {
+                  outcome.writes += 1;
+                  outcome.failed.push(`${line.label}: ${describeError(e)}. Outcome may be ambiguous; inspect before retrying.`);
+                  break;
+                }
               }
-            }
-          });
-          invalidateBudgetSnapshot(args.budget_id);
+            });
+            invalidateBudgetSnapshot(args.budget_id);
+          }
         }
       }
       const calls = apiCalls + (applied?.writes ?? 0);
@@ -456,17 +492,23 @@ function renderIntegrity(findings: Findings, plan: RepairPlan, applied: Applied 
   return lines.join("\n");
 }
 
-function renderPlan(plan: MonthPlan, applied: { writes: number; failed: string[]; skipped?: string } | null, calls: number): string {
-  const lines = [`Plan for ${month7(plan.month)} (variable costs from ${month7(plan.basedOn)} spending)`];
-  for (const l of plan.lines) lines.push(`  ${l.label}: ${money(l.current)} -> ${money(l.target)} (${l.rule})`);
+function renderPlan(plan: MonthPlan, applied: PlanApplied | null, calls: number): string {
+  const lines = [`Plan for ${month7(plan.month)} (from ${month7(plan.basedOn)})`];
+  for (const l of plan.lines) {
+    const part = plan.funding === "in_order" && Math.abs(l.funded - l.delta) >= SUB_CENT
+      ? ` - Ready to Assign pays ${money(l.funded)} of ${money(l.delta)}` : "";
+    lines.push(`  ${l.label}: ${money(l.current)} -> ${money(l.target)} (${l.basis})${part}`);
+  }
   if (plan.lines.length === 0) lines.push(`  Nothing to change.`);
   lines.push(
     ``,
     `Net change ${money(plan.increase)}; Ready to Assign from ${month7(plan.month)} on: ${money(plan.readyToAssign)}` +
-      (plan.affordable ? "" : " - NOT ENOUGH")
+      (plan.affordable ? "" : plan.funding === "in_order"
+        ? ` - funding in rule order: ${money(plan.fundedIncrease)}, ${money(plan.shortfall)} short`
+        : " - NOT ENOUGH")
   );
   if (plan.flags.length > 0) {
-    lines.push(``, `Fixed costs to look at:`);
+    lines.push(``, `To look at:`);
     for (const f of plan.flags) lines.push(`  ${f.label}: ${f.issue.replace(/_/g, " ")} - ${f.detail}`);
   }
   if (applied) {

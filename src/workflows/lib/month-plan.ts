@@ -1,24 +1,48 @@
 import { BudgetModel, SUB_CENT, addMonths } from "./budget-model.js";
+import { formatCurrency } from "../../utils/formatting.js";
 
 /**
- * Next month's assignments, by the house rules:
+ * A month's assignments by rules the caller gives. The server holds no house rules: a
+ * category takes the first rule that selects it (by group name or category id), and
+ * categories no rule selects are left alone.
  *
- * - Variable Costs: assign what the category spent last month (YNAB's
- *   "Spent Last Month"), so run this once last month is closed.
- * - Fixed Costs: fund each goal (assigned + goal_under_funded), and flag the
- *   ones that need attention: charges with no goal, goals whose charge stopped,
- *   and charges that no longer match the goal.
- * - Every other group is left alone.
+ * - spent: what the category spent in the month before (YNAB's "Spent Last Month").
+ *   whenNothingSpent "source_budgeted" uses that month's assigned amount instead of 0;
+ *   atLeastSourceBudgeted never goes below that month's assigned amount, so a plan made
+ *   while that month is still running does not shrink on its first small charge.
+ * - goal: fund each active goal (assigned + goal_under_funded); with flags (default),
+ *   report charges with no goal, goals whose charge stopped, and monthly charges that no
+ *   longer match their goal.
+ *
+ * Only Ready to Assign pays for increases. funding "all_or_nothing" funds the whole plan or
+ * nothing; "in_order" funds lines in rule order (decreases free their money first) until
+ * Ready to Assign runs out, part-funding the line it runs out on.
  */
+
+interface RuleTarget {
+  group?: string;
+  categoryIds?: string[];
+}
+
+export type PlanRule =
+  | (RuleTarget & { kind: "spent"; whenNothingSpent?: "zero" | "source_budgeted"; atLeastSourceBudgeted?: boolean })
+  | (RuleTarget & { kind: "goal"; flags?: boolean });
+
+export type Funding = "all_or_nothing" | "in_order";
 
 export interface PlanLine {
   categoryId: string;
   label: string;
-  group: "variable" | "fixed";
-  rule: string;
+  /** Index of the rule that set it. */
+  rule: number;
+  kind: PlanRule["kind"];
+  /** Why this target, for people. */
+  basis: string;
   current: number;
   target: number;
   delta: number;
+  /** The part of delta Ready to Assign pays for: all of a decrease, 0..delta of an increase. */
+  funded: number;
 }
 
 export interface PlanFlag {
@@ -31,68 +55,93 @@ export interface PlanFlag {
 export interface MonthPlan {
   month: string;
   basedOn: string;
+  funding: Funding;
   lines: PlanLine[];
   flags: PlanFlag[];
+  /** Net change if every line were funded. */
   increase: number;
+  /** Net change the plan writes (sum of funded). */
+  fundedIncrease: number;
+  /** Increases Ready to Assign cannot pay for. */
+  shortfall: number;
   /** Lowest Ready to Assign from the month on, before the plan. */
   readyToAssign: number;
+  /** The whole plan fits in Ready to Assign. */
   affordable: boolean;
 }
 
 export interface MonthPlanOptions {
-  variableGroup?: string;
-  fixedGroup?: string;
+  funding?: Funding;
 }
 
-export function planMonth(model: BudgetModel, month: string, options: MonthPlanOptions = {}): MonthPlan {
-  const { variableGroup = "Variable Costs", fixedGroup = "Fixed Costs" } = options;
+export function planMonth(model: BudgetModel, month: string, rules: PlanRule[], options: MonthPlanOptions = {}): MonthPlan {
+  const funding = options.funding ?? "all_or_nothing";
   const target = model.monthCategories.get(month);
   if (!target) throw new Error(`Month ${month} is not in the budget (it has ${model.months[0]} to ${model.months.at(-1)}).`);
+  if (rules.length === 0) throw new Error("Give at least one rule.");
+  const groupNames = new Set(Array.from(model.groupNames.values(), (n) => n.trim()));
+  rules.forEach((r, i) => {
+    const n = i + 1;
+    if ((r.group === undefined) === (r.categoryIds === undefined)) throw new Error(`Rule ${n}: give exactly one of group or category_ids.`);
+    if (r.group !== undefined && !groupNames.has(r.group.trim())) throw new Error(`Rule ${n}: no category group named "${r.group}".`);
+    for (const id of r.categoryIds ?? []) if (!model.categories.has(id)) throw new Error(`Rule ${n}: unknown category ${id}.`);
+  });
+
   const previous = addMonths(month, -1);
+  const source = previous.substring(0, 7);
   const lines: PlanLine[] = [];
   const flags: PlanFlag[] = [];
+  const line = (categoryId: string, current: number, label: string, rule: number, kind: PlanRule["kind"], basis: string, value: number): PlanLine =>
+    ({ categoryId, label, rule, kind, basis, current, target: value, delta: value - current, funded: 0 });
 
   for (const c of target.values()) {
     if (c.hidden || model.internalIds.has(c.id)) continue;
     const group = model.groupOf(c.id)?.trim();
+    const index = rules.findIndex((r) => (r.categoryIds ? r.categoryIds.includes(c.id) : r.group!.trim() === group));
+    if (index < 0) continue;
+    const rule = rules[index]!;
     const label = model.categoryLabel(c.id);
 
-    if (group === variableGroup) {
-      const activity = model.monthCategory(previous, c.id)?.activity ?? 0;
-      const spent = Math.max(0, -activity);
-      lines.push({
-        categoryId: c.id, label, group: "variable", rule: `spent in ${previous.substring(0, 7)}`,
-        current: c.budgeted, target: spent, delta: spent - c.budgeted,
-      });
+    if (rule.kind === "spent") {
+      const before = model.monthCategory(previous, c.id);
+      const spent = Math.max(0, -(before?.activity ?? 0));
+      const assigned = Math.max(0, before?.budgeted ?? 0);
+      let value = spent;
+      let basis = `spent in ${source}`;
+      if (spent < SUB_CENT && rule.whenNothingSpent === "source_budgeted") {
+        value = assigned;
+        basis = `nothing spent in ${source}; its assigned`;
+      }
+      if (rule.atLeastSourceBudgeted && assigned > value) {
+        value = assigned;
+        basis = `${source}'s assigned (more than spent)`;
+      }
+      lines.push(line(c.id, c.budgeted, label, index, "spent", basis, value));
       continue;
     }
 
-    if (group !== fixedGroup) continue;
+    const wantFlags = rule.flags !== false;
     const outflows = recentOutflows(model, c.id, month, 12);
     if (!c.goal_type) {
-      if (outflows.length > 0) {
+      if (wantFlags && outflows.length > 0) {
         flags.push({
           categoryId: c.id, label, issue: "no_goal",
-          detail: `${outflows.length} charge(s) in the last 12 months, latest ${outflows[0]!.date} ${outflows[0]!.amount}`,
+          detail: `${outflows.length} charge(s) in the last 12 months, latest ${outflows[0]!.date} ${formatCurrency(-outflows[0]!.amount)}`,
         });
       }
       continue;
     }
     if (c.goal_snoozed_at) continue;
-    const underFunded = c.goal_under_funded ?? 0;
-    lines.push({
-      categoryId: c.id, label, group: "fixed", rule: "goal underfunded",
-      current: c.budgeted, target: c.budgeted + underFunded, delta: underFunded,
-    });
+    lines.push(line(c.id, c.budgeted, label, index, "goal", "goal underfunded", c.budgeted + (c.goal_under_funded ?? 0)));
+    if (!wantFlags) continue;
 
     // A goal repeating every N months should have seen a charge within 2N months.
     const cycle = cycleMonths(c.goal_cadence, c.goal_cadence_frequency);
     if (cycle && c.goal_creation_month && c.goal_creation_month <= addMonths(month, -2 * cycle)) {
-      const window = recentOutflows(model, c.id, month, 2 * cycle);
-      if (window.length === 0) {
+      if (recentOutflows(model, c.id, month, 2 * cycle).length === 0) {
         flags.push({
           categoryId: c.id, label, issue: "goal_without_charges",
-          detail: `goal ${c.goal_target} repeats every ${cycle} month(s) but nothing was charged in the last ${2 * cycle}`,
+          detail: `goal ${formatCurrency(c.goal_target ?? 0)} repeats every ${cycle} month(s) but nothing was charged in the last ${2 * cycle}`,
         });
       }
     }
@@ -101,25 +150,45 @@ export function planMonth(model: BudgetModel, month: string, options: MonthPlanO
     if (latest && c.goal_target && Math.abs(-latest.amount - c.goal_target) >= SUB_CENT && cycle === 1) {
       flags.push({
         categoryId: c.id, label, issue: "charge_differs_from_goal",
-        detail: `latest charge ${-latest.amount} on ${latest.date} vs goal ${c.goal_target}`,
+        detail: `latest charge ${formatCurrency(-latest.amount)} on ${latest.date} vs goal ${formatCurrency(c.goal_target)}`,
       });
     }
   }
 
-  const changed = lines.filter((l) => Math.abs(l.delta) >= SUB_CENT);
+  const changed = lines
+    .filter((l) => Math.abs(l.delta) >= SUB_CENT)
+    .sort((a, b) => a.rule - b.rule || a.label.localeCompare(b.label));
   const increase = changed.reduce((s, l) => s + l.delta, 0);
   let readyToAssign = Number.POSITIVE_INFINITY;
   for (const m of model.months) if (m >= month) readyToAssign = Math.min(readyToAssign, model.toBeBudgeted.get(m) ?? 0);
   if (readyToAssign === Number.POSITIVE_INFINITY) readyToAssign = 0;
+  const affordable = increase <= readyToAssign;
+
+  if (funding === "all_or_nothing") {
+    for (const l of changed) l.funded = affordable ? l.delta : 0;
+  } else {
+    let remaining = readyToAssign + changed.reduce((s, l) => s + Math.max(0, -l.delta), 0);
+    for (const l of changed) {
+      if (l.delta < 0) {
+        l.funded = l.delta;
+        continue;
+      }
+      l.funded = Math.max(0, Math.min(l.delta, remaining));
+      remaining -= l.funded;
+    }
+  }
 
   return {
     month,
     basedOn: previous,
-    lines: changed.sort((a, b) => a.label.localeCompare(b.label)),
+    funding,
+    lines: changed,
     flags,
     increase,
+    fundedIncrease: changed.reduce((s, l) => s + l.funded, 0),
+    shortfall: changed.reduce((s, l) => s + (l.delta > 0 ? l.delta - l.funded : 0), 0),
     readyToAssign,
-    affordable: increase <= readyToAssign,
+    affordable,
   };
 }
 
